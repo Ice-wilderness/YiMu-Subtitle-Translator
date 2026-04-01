@@ -140,13 +140,14 @@ python app.py
 
 ### 音视频转录（可选）
 
-如果你已经有 SRT 字幕文件，可以跳过这部分。如果需要从音视频生成字幕：
+如果你已经有 SRT 字幕文件，可以跳过这部分，直接导入即可。
 
-- **Python 库模式**：`pip install` 时已自动安装 `faster-whisper`，首次转录会自动下载模型文件（约 1-3GB）
-- **CLI 模式（推荐，速度更快）**：需要手动下载 [faster-whisper-xxl](https://github.com/Purfview/whisper-standalone-win)，放到项目 `tools/` 目录或系统 PATH 中
-- 转录音视频还需要系统安装 [FFmpeg](https://ffmpeg.org/download.html)
+如果需要从音视频生成字幕，需额外安装：
 
-启动工作台后界面会自动检测可用的转录引擎。如果你只做字幕翻译（导入已有 SRT），则无需安装以上任何内容。
+1. **[FFmpeg](https://ffmpeg.org/download.html)** — 用于提取音频
+2. **[faster-whisper-xxl](https://github.com/Purfview/whisper-standalone-win)** — 下载后放到项目 `tools/` 目录或系统 PATH 中
+
+启动后界面会自动检测转录引擎是否可用。
 
 ---
 
