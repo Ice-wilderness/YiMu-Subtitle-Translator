@@ -26,7 +26,9 @@
 
 ### 与 VideoLingo 对比测试
 
-使用同一个 17 分钟英文技术视频、同一个翻译模型，对比译幕与 [VideoLingo](https://github.com/Huanshere/VideoLingo)（16.4k Star）：
+使用同一个 17 分钟英文技术视频、同一个翻译模型，对比译幕与 [VideoLingo](https://github.com/Huanshere/VideoLingo)（16.4k Star）。
+
+选择 VideoLingo 作为对比对象，是因为它是目前 GitHub 上同类项目中 Star 最多、质量保障机制最完善的（采用翻译→反思→适配三轮翻译），可以代表当前 AI 字幕翻译的较高水平。
 
 **专有名词准确性 — ASR 矫正的价值：**
 
