@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>译幕</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ==================== 顶部导航（合并 logo + 步骤 + 工具按钮） ==================== -->
+<header class="top-bar">
+    <h1 class="logo">
+        <div class="logo-icon">&#127916;</div>
+        译幕 <span style="font-size:0.5em;font-weight:400;color:var(--muted);vertical-align:middle">v2.0</span>
+        <span style="font-size:0.38em;font-weight:400;color:var(--text-muted);margin-left:8px;vertical-align:middle">目前仅测试了英语→中文翻译</span>
+    </h1>
+    <nav class="step-bar">
+        <div class="step active" data-step="1" onclick="switchTab(1)">
+            <span class="step-num">1</span><span class="step-label">导入文件</span>
+        </div>
+        <div class="step" data-step="2" onclick="switchTab(2)">
+            <span class="step-num">2</span><span class="step-label">短句合并</span>
+        </div>
+        <div class="step" data-step="3" onclick="switchTab(3)">
+            <span class="step-num">3</span><span class="step-label">AI 矫正 &amp; 翻译</span>
+        </div>
+        <div class="step" data-step="4" onclick="switchTab(4)">
+            <span class="step-num">4</span><span class="step-label">导出</span>
+        </div>
+    </nav>
+    <div class="top-actions">
+        <button class="icon-btn" onclick="toggleLogPanel()" title="服务器日志" id="logBtn">&#128196;</button>
+        <button class="icon-btn" onclick="event.stopPropagation();showOnboarding()" title="新手引导">&#63;</button>
+        <button class="icon-btn" onclick="toggleSettings()" title="软件设置">&#9881;</button>
+    </div>
+</header>
+
+<!-- ==================== Loading Overlay ==================== -->
+<div id="overlay">
+    <div class="spinner"></div>
+    <h3 id="loadingText">AI 正在处理...</h3>
+    <p id="loadingProgress" style="display:none;margin:0;font-size:0.9em;color:var(--text-muted)"></p>
+</div>
+
+<!-- ==================== Tab 1: 导入文件 ==================== -->
+<section class="tab-panel" id="tab-1">
+    <div class="card">
+        <h2 class="card-title">&#128229; 导入文件</h2>
+        <p class="card-subtitle">支持直接上传 SRT 字幕文件，或上传音视频文件通过 Whisper 自动转录生成字幕。</p>
+
+        <div class="upload-area" id="uploadArea">
+            <div class="upload-icon">&#128229;</div>
+            <h3>点击或拖拽上传文件</h3>
+            <p class="muted">SRT 字幕文件 · MP4 / MKV / MOV / MP3 / WAV / M4A / FLAC 等音视频格式</p>
+            <input type="file" id="fileInput" accept=".srt,video/*,audio/*,.mkv,.flac" style="display:none">
+        </div>
+
+        <!-- SRT 上传后显示 -->
+        <div id="uploadStats" class="stats-grid" style="display:none">
+            <div class="stat-item"><div class="stat-value" id="statTotal">0</div><div class="stat-label">总字幕数</div></div>
+            <div class="stat-item"><div class="stat-value" id="statDuration">00:00:00</div><div class="stat-label">总时长</div></div>
+            <div class="stat-item"><div class="stat-value" id="statFileName">-</div><div class="stat-label">文件名</div></div>
+        </div>
+        <div id="uploadNext" style="display:none;text-align:center;margin-top:20px">
+            <button class="btn btn-primary" onclick="switchTab(2)">下一步: 短句合并 &#10140;</button>
+        </div>
+
+        <!-- 音视频选中后显示 -->
+        <div id="transcribePanel" style="display:none">
+            <div id="transcribeFileInfo" class="stats-grid" style="margin-top:12px">
+                <div class="stat-item"><div class="stat-value" id="transcribeFileName" style="font-size:0.85em;word-break:break-all">-</div><div class="stat-label">文件名</div></div>
+                <div class="stat-item"><div class="stat-value" id="transcribeFileSize">-</div><div class="stat-label">文件大小</div></div>
+            </div>
+
+            <!-- 基本设置 -->
+            <div class="setting-row" style="margin-top:20px;flex-wrap:wrap;gap:16px">
+                <div style="display:flex;align-items:center;gap:10px">
+                    <label style="white-space:nowrap">转录引擎：</label>
+                    <select id="transcribeEngine" class="input-sm" onchange="onEngineChange(); saveWhisperConfig()">
+                        <option value="auto" selected>自动（优先 CLI）</option>
+                        <option value="cli">Faster-Whisper CLI</option>
+                        <option value="python">Python 库</option>
+                    </select>
+                    <span id="engineStatus" class="muted" style="font-size:0.82em"></span>
+                </div>
+            </div>
+            <!-- CLI 未检测到时显示的引导卡片 -->
+            <div id="cliInstallCard" style="display:none;margin-top:12px">
+                <div style="background:var(--bg-secondary,#f8f9fa);border:1px solid var(--border,#dee2e6);border-radius:8px;padding:12px 16px;font-size:0.88em;color:var(--text-muted,#6c757d)">
+                    <div style="margin-bottom:8px">&#9889; 未检测到 faster-whisper-xxl CLI（转录速度快 5x），将使用 Python 库（速度较慢）。</div>
+                    <div style="margin-bottom:10px">如需使用 CLI，请将 <code>faster-whisper-xxl.exe</code> 放入以下目录后重启工作台：<br>
+                        <span id="cliToolsPath" style="font-family:monospace;color:var(--text,#333)"></span>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <button class="btn btn-sm btn-secondary" onclick="openToolsDir()">&#128193; 打开该目录</button>
+                        <button class="btn btn-sm btn-secondary" onclick="window.open('https://github.com/Purfview/whisper-standalone-win/releases','_blank')">&#8659; 去下载页面</button>
+                    </div>
+                </div>
+            </div>
+            <div class="setting-row" style="margin-top:10px;flex-wrap:wrap;gap:16px">
+                <div style="display:flex;align-items:center;gap:10px">
+                    <label style="white-space:nowrap">Whisper 模型：</label>
+                    <select id="transcribeModel" class="input-sm" onchange="saveWhisperConfig()">
+                        <option value="tiny">tiny</option>
+                        <option value="base">base</option>
+                        <option value="small">small</option>
+                        <option value="medium">medium</option>
+                        <option value="large-v1">large-v1</option>
+                        <option value="large-v2" selected>large-v2 ★ 推荐</option>
+                        <option value="large-v3">large-v3</option>
+                        <option value="large-v3-turbo">large-v3-turbo</option>
+                    </select>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px">
+                    <label style="white-space:nowrap">运行设备：</label>
+                    <select id="transcribeDevice" class="input-sm" onchange="saveWhisperConfig()">
+                        <option value="cuda" selected>CUDA (GPU)</option>
+                        <option value="cpu">CPU</option>
+                    </select>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px">
+                    <label style="white-space:nowrap">源语言：</label>
+                    <select id="transcribeLang" class="input-sm" onchange="saveWhisperConfig()">
+                        <option value="auto" selected>自动检测</option>
+                        <option value="en">English</option>
+                        <option value="zh">中文</option>
+                        <option value="ja">日本語</option>
+                        <option value="ko">한국어</option>
+                        <option value="yue">粤语</option>
+                        <option value="fr">Français</option>
+                        <option value="de">Deutsch</option>
+                        <option value="es">Español</option>
+                        <option value="ru">Русский</option>
+                        <option value="pt">Português</option>
+                        <option value="tr">Türkçe</option>
+                        <option value="it">Italiano</option>
+                        <option value="nl">Dutch</option>
+                        <option value="ar">Arabic</option>
+                        <option value="sv">Swedish</option>
+                        <option value="id">Indonesian</option>
+                        <option value="hi">Hindi</option>
+                        <option value="vi">Vietnamese</option>
+                        <option value="th">Thai</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- 高级设置（可折叠） -->
+            <details id="transcribeAdvanced" style="margin-top:16px">
+                <summary style="cursor:pointer;font-size:0.9em;font-weight:600;color:var(--primary);user-select:none">&#9881; 高级设置</summary>
+                <div style="margin-top:12px;display:flex;flex-direction:column;gap:14px;padding:14px;background:var(--bg-card-alt, #f7f8fa);border-radius:10px">
+
+                    <!-- VAD 设置 -->
+                    <div style="font-size:0.85em;font-weight:600;color:var(--text-muted)">VAD 设置</div>
+                    <div class="setting-row" style="flex-wrap:wrap;gap:16px">
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                            <input type="checkbox" id="transcribeVadFilter" checked onchange="saveWhisperConfig()">
+                            <span>VAD 过滤</span>
+                            <span class="muted" style="font-size:0.82em">过滤无人声片段，减少幻觉</span>
+                        </label>
+                    </div>
+                    <div class="setting-row" style="flex-wrap:wrap;gap:16px">
+                        <div style="display:flex;align-items:center;gap:10px">
+                            <label style="white-space:nowrap">VAD 阈值：</label>
+                            <input type="range" id="transcribeVadThreshold" min="0" max="1" step="0.05" value="0.40" oninput="document.getElementById('vadThresholdVal').textContent=parseFloat(this.value).toFixed(2); saveWhisperConfig()">
+                            <span id="vadThresholdVal" class="badge">0.40</span>
+                            <span class="muted" style="font-size:0.82em">语音概率阈值，高于此值视为语音</span>
+                        </div>
+                    </div>
+                    <div class="setting-row" style="flex-wrap:wrap;gap:16px">
+                        <div style="display:flex;align-items:center;gap:10px">
+                            <label style="white-space:nowrap">最小静音时长：</label>
+                            <input type="number" id="transcribeMinSilence" class="input-sm" value="300" min="50" max="2000" step="50" onchange="saveWhisperConfig()">
+                            <span class="muted" style="font-size:0.82em">ms，低于此时长的静音不会分割语音段</span>
+                        </div>
+                    </div>
+
+                    <!-- 其他设置 -->
+                    <div style="font-size:0.85em;font-weight:600;color:var(--text-muted);margin-top:6px">其他设置</div>
+                    <div class="setting-row" style="flex-wrap:wrap;gap:16px" id="voiceSepRow">
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                            <input type="checkbox" id="transcribeFfMdx" onchange="saveWhisperConfig()">
+                            <span>人声分离</span>
+                            <span class="muted" style="font-size:0.82em">使用 MDX-Net 分离人声和背景音乐（仅 CLI 模式，适合有背景音乐的视频）</span>
+                        </label>
+                    </div>
+                    <div class="setting-row" style="flex-wrap:wrap;gap:16px" id="wordTsRow">
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                            <input type="checkbox" id="transcribeWordTs" checked onchange="saveWhisperConfig()">
+                            <span>单字时间戳</span>
+                            <span class="muted" style="font-size:0.82em">开启后生成单字级时间戳，断句更精确；关闭后使用原始分段（仅 Python 模式）</span>
+                        </label>
+                    </div>
+                    <div class="setting-row" style="flex-wrap:wrap;gap:16px">
+                        <div style="display:flex;align-items:center;gap:10px">
+                            <label style="white-space:nowrap">Beam Size：</label>
+                            <input type="range" id="transcribeBeamSize" min="1" max="10" step="1" value="5" oninput="document.getElementById('beamSizeVal').textContent=this.value; saveWhisperConfig()">
+                            <span id="beamSizeVal" class="badge">5</span>
+                            <span class="muted" style="font-size:0.82em">束搜索宽度，越大越准但越慢</span>
+                        </div>
+                    </div>
+                    <div class="setting-row" style="flex-wrap:wrap;gap:16px">
+                        <div style="display:flex;align-items:center;gap:10px">
+                            <label style="white-space:nowrap">提示词：</label>
+                            <input type="text" id="transcribePrompt" class="input-full" placeholder="选填，填写视频中的专有名词可提升识别准确率" onchange="saveWhisperConfig()">
+                        </div>
+                    </div>
+                </div>
+            </details>
+
+            <div style="margin-top:16px">
+                <button class="btn btn-ai" id="transcribeStartBtn" onclick="startTranscription()">&#127908; 开始转录</button>
+            </div>
+
+            <div id="transcribeProgressArea" style="display:none;margin-top:20px">
+                <div style="background:var(--border-light);border-radius:99px;height:8px;overflow:hidden">
+                    <div id="transcribeProgressBar" style="width:0%;height:100%;background:var(--primary);border-radius:99px;transition:width 0.4s ease"></div>
+                </div>
+                <p id="transcribeProgressMsg" class="muted" style="margin-top:8px;text-align:center;font-size:0.9em"></p>
+            </div>
+
+            <div id="transcribeResultArea" style="display:none;margin-top:20px">
+                <div class="stats-grid">
+                    <div class="stat-item"><div class="stat-value" id="transcribeSubCount">0</div><div class="stat-label">字幕条数</div></div>
+                    <div class="stat-item"><div class="stat-value" id="transcribeResultDuration">00:00:00</div><div class="stat-label">总时长</div></div>
+                </div>
+                <div style="text-align:center;margin-top:16px;display:flex;gap:10px;justify-content:center">
+                    <button class="btn btn-primary" onclick="loadTranscribeResult()">下一步：短句合并 &#10140;</button>
+                    <button class="btn btn-secondary" onclick="downloadTranscribeSRT()">&#11015; 下载 SRT</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ==================== Tab 2: 短句合并 ==================== -->
+<section class="tab-panel" id="tab-2" style="display:none">
+    <div class="card">
+        <h2 class="card-title"><div class="card-title-icon" style="background:#eef1fe">&#128257;</div>自动合并孤立短字幕</h2>
+        <p class="card-subtitle">语音转文字经常将极短的片段单独切成一条字幕，此工具自动将它们与上下文合并，支持所有语言。<strong>适合长视频</strong>，短视频可直接跳过。</p>
+        <div class="setting-row">
+            <label id="mergeLimitLabel">判定为短句的最大单词数：</label>
+            <input type="range" id="mergeMaxWords" min="1" max="15" value="3" oninput="document.getElementById('mergeMaxWordsVal').textContent=this.value; previewMerge()">
+            <span id="mergeMaxWordsVal" class="badge">3</span>
+        </div>
+        <p class="hint" style="margin-top:6px">已根据字幕语言自动设置阈值（检测语言：<span id="detectedLang">上传文件后自动检测</span>）</p>
+        <div id="mergeResult" style="margin-top:20px">
+            <div class="stats-grid">
+                <div class="stat-item"><div class="stat-value" id="mergeBefore">-</div><div class="stat-label">合并前</div></div>
+                <div class="stat-item"><div class="stat-value" id="mergeAfter">-</div><div class="stat-label">合并后</div></div>
+                <div class="stat-item"><div class="stat-value" id="mergeDiff">-</div><div class="stat-label">合并数量</div></div>
+            </div>
+        </div>
+        <div style="text-align:center;margin-top:20px">
+            <button class="btn btn-primary" onclick="runEnglishMerge()">执行合并 &#10140;</button>
+        </div>
+    </div>
+</section>
+
+<!-- ==================== Tab 3: AI 矫正翻译 ==================== -->
+<section class="tab-panel" id="tab-3" style="display:none">
+    <div class="card">
+        <h2 class="card-title"><div class="card-title-icon" style="background:#eef1fe">&#10024;</div>AI 语音识别矫正 &amp; 翻译 <span class="version-tag" id="versionDisplay">v0</span></h2>
+        <p class="card-subtitle">分两步：① 点「分析」让 AI 找出字幕中的误识别词（如"deep sea"实为"DeepSeek"），确认后点「提交修改」应用矫正，可多轮分析直到满意；② 点「最终翻译」将字幕翻译成中文。<strong>填写视频背景后，矫正准确率会显著提升。</strong></p>
+        <div class="ai-grid">
+            <!-- 左侧：控制台 -->
+            <div class="ai-console">
+                <div class="section-title"><span class="step-badge">Phase 1</span> AI 分析控制台</div>
+                <label>视频背景 <span class="muted" style="font-weight:normal;font-size:0.85em">（填写后矫正准确率显著提升）</span></label>
+                <textarea id="videoBgInput" class="textarea" style="height:80px" placeholder="粘贴视频的标题和内容简介，例如：&#10;标题：手把手教你用 Claude 做 AI 应用&#10;简介：本期讲解 Claude API 的调用方式和 Prompt 技巧..."></textarea>
+                <button class="btn btn-ai" onclick="runAIAnalysis()">&#10024; 分析当前版本文本</button>
+                <div id="tokenStatAnalysis" class="token-stat" style="display:none"></div>
+
+                <div class="divider"></div>
+                <div class="section-title">本轮 AI 建议修正</div>
+                <div class="ai-tip">
+                    <span class="ai-tip-icon">&#128161;</span>
+                    <span>AI 分析结果仅供参考，建议分析 3 次并对比结果。可点击「编辑」手动修正不准确的建议。</span>
+                </div>
+                <div id="suggestionCards" class="suggestion-list">
+                    <div class="empty-hint">等待 AI 分析...</div>
+                </div>
+                <button class="btn btn-commit" id="commitBtn" onclick="commitCorrections()" disabled>&#9989; 提交修改 (Commit)</button>
+                <p class="hint">点击「忽略」可跳过某条建议，只有未忽略的建议才会被提交应用。</p>
+            </div>
+            <!-- 右侧：预览 -->
+            <div class="ai-preview-panel">
+                <div class="section-title">
+                    <span><span class="step-badge">Phase 2</span> 实时预览</span>
+                </div>
+                <div class="diff-nav-bar" id="navBar" style="display:none">
+                    <div class="diff-nav-controls">
+                        <button class="diff-nav-btn" onclick="jumpNav(-1)">&#9650; 上一个</button>
+                        <button class="diff-nav-btn" onclick="jumpNav(1)">下一个 &#9660;</button>
+                    </div>
+                    <div class="diff-nav-controls">
+                        <span id="changeCounter" class="diff-nav-counter">0 处修改</span>
+                        <input type="number" id="diffNavInput" class="diff-nav-input" placeholder="跳到序号" min="1"
+                               onkeydown="if(event.key==='Enter')jumpToNavIndex()"
+                               title="输入修改序号后按 Enter 或点击跳转">
+                        <button class="diff-nav-btn diff-nav-jump" onclick="jumpToNavIndex()">跳转</button>
+                    </div>
+                </div>
+                <div style="border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:8px">
+                    <div class="search-row">
+                        <input type="text" id="previewNumSearch" class="input-sm" placeholder="序号 (如 1,2,3)">
+                        <button class="btn btn-primary btn-sm" onclick="previewSearchByNum()">搜索</button>
+                    </div>
+                    <div class="search-row">
+                        <input type="text" id="previewTimeSearch" class="input-sm" placeholder="时间 (如 00:06:56)">
+                        <button class="btn btn-primary btn-sm" onclick="previewSearchByTime()">搜索</button>
+                    </div>
+                    <div class="search-row">
+                        <input type="text" id="previewTextSearch" class="input-sm" placeholder="关键词">
+                        <button class="btn btn-primary btn-sm" onclick="previewSearchByText()">搜索</button>
+                    </div>
+                    <div class="search-row">
+                        <button class="btn btn-secondary btn-sm" onclick="previewClearSearch()">清除</button>
+                        <span id="previewSearchInfo" class="muted" style="font-size:0.8em"></span>
+                    </div>
+                    <div id="previewSearchNav" style="display:none" class="search-row">
+                        <button class="btn btn-primary btn-sm" onclick="previewNavPrev()">&#9664; 上一条</button>
+                        <span id="previewSearchNavInfo" class="muted"></span>
+                        <button class="btn btn-primary btn-sm" onclick="previewNavNext()">下一条 &#9654;</button>
+                    </div>
+                </div>
+                <div id="previewBox" class="preview-scroll">
+                    <div class="empty-hint">请先上传文件并进行分析</div>
+                </div>
+            </div>
+        </div>
+        <div class="divider"></div>
+        <div style="text-align:center">
+            <button class="btn btn-primary" id="oneclickBtn" onclick="startOneclickTranslation()" disabled style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);border:none;padding:10px 32px;font-size:1em">&#9889; 一键翻译</button>
+            <div id="tokenStatTrans" class="token-stat" style="display:none;max-width:400px;margin:10px auto"></div>
+            <div id="oneclickProgress" style="display:none;max-width:500px;margin:16px auto">
+                <div class="oneclick-stage" id="oneclickStageText" style="font-size:0.95em;color:var(--text);margin-bottom:8px"></div>
+                <div style="background:#e9ecef;border-radius:8px;height:8px;overflow:hidden">
+                    <div id="oneclickBar" style="height:100%;background:linear-gradient(90deg,#667eea,#764ba2);border-radius:8px;width:0%;transition:width 0.3s"></div>
+                </div>
+                <div id="oneclickDetail" style="font-size:0.82em;color:var(--muted);margin-top:6px"></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ==================== Tab 4: 导出 ==================== -->
+<section class="tab-panel" id="tab-4" style="display:none">
+    <div class="card">
+        <h2 class="card-title">双语位置调换<span style="font-size:0.7em;font-weight:400;color:var(--muted);margin-left:8px">（可选）</span></h2>
+        <p class="card-subtitle">选择双语字幕中中文和外文的上下排列顺序，选择后立即生效。</p>
+        <div class="setting-row" style="flex-direction:column;align-items:center;gap:14px">
+            <div class="radio-group">
+                <label class="radio-label swap-option">
+                    <input type="radio" name="swapDirection" value="en2cn" onchange="runPositionSwap()">
+                    <div class="swap-demo">
+                        <div class="swap-before">
+                            <span class="swap-tag">调换前</span>
+                            <div class="swap-line en">Hello World</div>
+                            <div class="swap-line cn">你好世界</div>
+                        </div>
+                        <span class="swap-arrow">&#10140;</span>
+                        <div class="swap-after">
+                            <span class="swap-tag">调换后</span>
+                            <div class="swap-line cn">你好世界</div>
+                            <div class="swap-line en">Hello World</div>
+                        </div>
+                    </div>
+                </label>
+                <label class="radio-label swap-option">
+                    <input type="radio" name="swapDirection" value="cn2en" onchange="runPositionSwap()">
+                    <div class="swap-demo">
+                        <div class="swap-before">
+                            <span class="swap-tag">调换前</span>
+                            <div class="swap-line cn">你好世界</div>
+                            <div class="swap-line en">Hello World</div>
+                        </div>
+                        <span class="swap-arrow">&#10140;</span>
+                        <div class="swap-after">
+                            <span class="swap-tag">调换后</span>
+                            <div class="swap-line en">Hello World</div>
+                            <div class="swap-line cn">你好世界</div>
+                        </div>
+                    </div>
+                </label>
+            </div>
+        </div>
+        <div id="swapResult" style="display:none;margin-top:15px;text-align:center">
+            <div class="stats-grid" style="max-width:300px;margin:0 auto">
+                <div class="stat-item"><div class="stat-value" id="swapCount">0</div><div class="stat-label">交换数量</div></div>
+            </div>
+        </div>
+    </div>
+    <div class="card" style="margin-top:20px;text-align:center">
+        <h2 class="card-title">下载导出</h2>
+        <p class="card-subtitle">预览最终双语字幕效果，确认无误后下载 SRT 文件，即可导入剪辑软件使用。</p>
+        <div class="stats-grid" style="margin-bottom:20px">
+            <div class="stat-item"><div class="stat-value" id="finalCount">0</div><div class="stat-label">字幕条数</div></div>
+            <div class="stat-item"><div class="stat-value" id="finalDuration">00:00:00</div><div class="stat-label">总时长</div></div>
+        </div>
+        <button class="btn btn-trans" onclick="downloadFinalSRT()">&#11015; 下载最终 SRT 文件</button>
+        <div id="finalPreview" class="preview-box" style="margin-top:20px;max-height:400px;overflow-y:auto;text-align:left"></div>
+    </div>
+</section>
+
+<!-- ==================== 浮动字幕编辑器按钮（仅在字幕合并模块显示） ==================== -->
+<button id="editorToggle" class="floating-btn btn-editor" onclick="toggleEditor()" style="display:none">
+    &#128196; 字幕编辑器
+</button>
+
+<!-- ==================== 编辑器遮罩（点击关闭） ==================== -->
+<div id="editorBackdrop" class="editor-backdrop" onclick="closeEditor()"></div>
+
+<!-- ==================== 字幕编辑器侧边栏 ==================== -->
+<div id="editorPanel" class="editor-panel">
+    <div class="editor-header">
+        <h3>&#127916; 字幕查看 & 编辑器</h3>
+        <button type="button" class="editor-close-btn" onclick="closeEditor()">&#10005; 关闭</button>
+    </div>
+    <div class="editor-search">
+        <div class="search-row">
+            <input type="text" id="editorNumSearch" class="input-sm" placeholder="序号 (如 1,2,3)">
+            <button class="btn btn-primary btn-sm" onclick="editorSearchByNum()">搜索</button>
+        </div>
+        <div class="search-row">
+            <input type="text" id="editorTimeSearch" class="input-sm" placeholder="时间 (如 00:06:56)">
+            <button class="btn btn-primary btn-sm" onclick="editorSearchByTime()">搜索</button>
+        </div>
+        <div class="search-row">
+            <input type="text" id="editorTextSearch" class="input-sm" placeholder="关键词">
+            <button class="btn btn-primary btn-sm" onclick="editorSearchByText()">搜索</button>
+        </div>
+        <div class="search-row">
+            <button class="btn btn-secondary btn-sm" onclick="editorShowAll()">显示全部</button>
+            <button class="btn btn-secondary btn-sm" onclick="editorClear()">清除</button>
+        </div>
+        <div id="editorNav" style="display:none" class="search-row">
+            <button class="btn btn-primary btn-sm" onclick="editorPrev()">&#9664; 上一条</button>
+            <span id="editorNavInfo" class="muted"></span>
+            <button class="btn btn-primary btn-sm" onclick="editorNext()">下一条 &#9654;</button>
+        </div>
+    </div>
+    <div id="editorContent" class="editor-content">
+        <div class="empty-hint">请先上传字幕文件</div>
+    </div>
+    <div class="editor-footer">
+        <button class="btn btn-success btn-sm" onclick="editorExport()" id="editorExportBtn" style="display:none">&#128190; 导出修改后的 SRT</button>
+    </div>
+</div>
+
+<!-- ==================== 设置面板 ==================== -->
+<div id="settingsOverlay" class="modal-overlay" style="display:none">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>&#9881; 软件设置</h2>
+            <button class="icon-btn" onclick="toggleSettings()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="settings-section">
+                <div class="settings-section-title">分析模型<span class="tooltip-wrap">?<span class="tooltip-text">用于字幕纠错分析，识别语音转文字中的错别字。需要推理能力强的模型。开发者已测试通过：Gemini 2.5 Flash / Pro、claude系列模型，其他模型未测试，欢迎自行尝试。</span></span></div>
+                <div class="form-group">
+                    <label>模型名称</label>
+                    <input type="text" id="cfgAnalysisModel" class="input-full" placeholder="如：gemini-2.5-flash-preview-04-17">
+                </div>
+                <div class="form-group">
+                    <label>API Key</label>
+                    <input type="password" id="cfgAnalysisApiKey" class="input-full">
+                </div>
+                <div class="form-group" style="margin-bottom:0">
+                    <label>Base URL</label>
+                    <input type="text" id="cfgAnalysisBaseUrl" class="input-full" placeholder="如：https://api.openai.com/v1">
+                </div>
+            </div>
+            <div class="settings-section">
+                <div class="settings-section-title">翻译模型<span class="tooltip-wrap">?<span class="tooltip-text">用于将字幕翻译成中文，需要语言表达能力强的模型。开发者已测试通过：GPT-4o / GPT-5.1、GLM-4.5，其他模型未测试，欢迎自行尝试。</span></span></div>
+                <div class="form-group">
+                    <label>模型名称</label>
+                    <input type="text" id="cfgTranslationModel" class="input-full" placeholder="如：gpt-4o">
+                </div>
+                <div class="form-group">
+                    <label>API Key</label>
+                    <input type="password" id="cfgTranslationApiKey" class="input-full">
+                </div>
+                <div class="form-group" style="margin-bottom:0">
+                    <label>Base URL</label>
+                    <input type="text" id="cfgTranslationBaseUrl" class="input-full" placeholder="如：https://api.openai.com/v1">
+                </div>
+            </div>
+            <div class="settings-section">
+                <div class="settings-section-title">翻译设置</div>
+                <div class="form-group">
+                    <label>批次大小<span style="font-weight:400;color:var(--text-muted);margin-left:6px">每次发送给模型的字幕条数</span></label>
+                    <input type="number" id="cfgBatchSize" class="input-sm" value="100" min="10" max="500">
+                </div>
+                <div class="form-group">
+                    <label>并行批次数<span style="font-weight:400;color:var(--text-muted);margin-left:6px">同时翻译的批次数量，越大越快但可能触发 API 限流</span></label>
+                    <input type="number" id="cfgParallelBatches" class="input-sm" value="3" min="1" max="10">
+                </div>
+                <div class="form-group" style="margin-bottom:0">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                        <input type="checkbox" id="cfgEnableContentAnalysis" checked>
+                        翻译前内容分析<span style="font-weight:400;color:var(--text-muted);margin-left:6px">自动生成术语表，适合专业/技术类视频；日常内容可关闭以节省一次 API 调用</span>
+                    </label>
+                </div>
+            </div>
+            <div class="settings-section">
+                <div class="settings-section-title">矫正分析提示词</div>
+                <p style="font-size:0.82em;color:var(--muted);margin:0 0 8px">告诉 AI 这个视频的背景信息和常见的识别错误。<code>【复制粘贴视频的标题和简介】</code> 会被 Tab 3 填写的视频背景自动替换。输出格式由系统自动处理，无需在此填写。</p>
+                <div class="form-group" style="margin-bottom:0">
+                    <textarea id="cfgDefaultPrompt" class="textarea" style="height:150px"></textarea>
+                </div>
+            </div>
+            <div style="display:flex;gap:10px">
+                <button class="btn btn-primary" onclick="saveSettings()">&#128190; 保存设置</button>
+                <button class="btn btn-secondary" onclick="toggleSettings()">取消</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ==================== 标记查看弹窗 ==================== -->
+<div id="marksModal" class="modal-overlay marks-modal" style="display:none" onclick="if(event.target===this)closeMarksModal()">
+    <div class="modal-content">
+        <div class="modal-header modal-header-danger">
+            <h2>&#128278; 已标记的字幕</h2>
+            <button class="icon-btn" onclick="closeMarksModal()">&times;</button>
+        </div>
+        <div class="modal-body" id="markedList"></div>
+    </div>
+</div>
+
+<!-- ==================== 新人引导弹窗 ==================== -->
+<div id="onboardingOverlay" class="onboarding-overlay" onclick="if(event.target===this)closeOnboarding()">
+    <div class="onboarding-modal">
+        <div class="onboarding-header">
+            <h2>&#127916; 欢迎使用译幕</h2>
+            <p>5 分钟快速上手，跟着引导完成第一个字幕翻译项目</p>
+        </div>
+        <div class="onboarding-progress" id="onboardingProgress"></div>
+        <div class="onboarding-body">
+
+            <div class="onboarding-step active" data-step="1">
+                <div class="onboarding-step-title"><div class="onboarding-step-num">⚙</div>首先：配置软件设置</div>
+                <p class="onboarding-step-desc">点击右上角 <strong>⚙ 软件设置</strong> 按钮，填写 AI 模型的 API 信息。<strong>不配置则无法使用矫正和翻译功能。</strong></p>
+                <div class="onboarding-tips"><ul>
+                    <li><strong>分析模型</strong>：用于识别字幕中的误识别词，已测试：Gemini 2.5 Flash / Pro</li>
+                    <li><strong>翻译模型</strong>：用于将字幕翻译成中文，已测试：GPT-4o / GPT-5.1</li>
+                    <li>⚠ 目前仅针对<strong>英语→中文</strong>翻译进行了测试，其他语言对未验证</li>
+                    <li>两个模型可以配置不同的 API Key 和 Base URL，也可以填同一个</li>
+                    <li>配置保存后永久生效，下次打开无需重新填写</li>
+                </ul></div>
+            </div>
+
+            <div class="onboarding-step" data-step="2">
+                <div class="onboarding-step-title"><div class="onboarding-step-num">1</div>导入文件</div>
+                <p class="onboarding-step-desc">将文件拖入上传区，或点击选择文件。支持两种方式：① 直接上传已有的 <code>.srt</code> 字幕文件；② 上传音视频文件（MP4、MKV、MP3 等），由本地 Whisper 模型自动转录生成字幕。</p>
+                <div class="onboarding-tips"><ul>
+                    <li>上传 SRT 文件后会直接显示字幕统计，可继续下一步</li>
+                    <li>上传音视频后会展开转录设置，选择模型和设备后点「开始转录」</li>
+                    <li>文件数据仅保存在浏览器内存中，刷新页面数据会清空</li>
+                </ul></div>
+            </div>
+
+            <div class="onboarding-step" data-step="3">
+                <div class="onboarding-step-title"><div class="onboarding-step-num">2</div>短句合并</div>
+                <p class="onboarding-step-desc">语音识别经常把短词单独切成一行字幕（如 "the"、"and"、"的"、"了"），此步骤自动将这些碎片合并到上下文句子里。</p>
+                <div class="onboarding-tips"><ul>
+                    <li>「最大单词数」滑块控制多少个词以内算作短句，默认 3 个</li>
+                    <li>点击「执行合并」后不可撤销，建议先确认参数</li>
+                    <li>合并后会显示合并了多少条字幕</li>
+                </ul></div>
+            </div>
+
+            <div class="onboarding-step" data-step="4">
+                <div class="onboarding-step-title"><div class="onboarding-step-num">3</div>AI 矫正 &amp; 翻译</div>
+                <p class="onboarding-step-desc">分两个阶段：① 用 AI 分析语音识别的错别字/误识别词，② 对矫正后的文本进行中文翻译。推荐使用「一键翻译」，自动完成翻译+质量检测+AI修复。</p>
+                <div class="onboarding-tips"><ul>
+                    <li><strong>重要：</strong>填写视频背景（标题和内容简介），AI 矫正效果更好</li>
+                    <li><strong>一键翻译（推荐）</strong>：自动执行内容分析→并行翻译→质量检测→AI修复</li>
+                    <li>也可以手动分步操作：先「分析」矫正，再「最终翻译」</li>
+                </ul></div>
+            </div>
+
+            <div class="onboarding-step" data-step="5">
+                <div class="onboarding-step-title"><div class="onboarding-step-num">4</div>导出</div>
+                <p class="onboarding-step-desc">可选调换双语上下顺序，预览最终字幕，下载 SRT 文件导入剪辑软件。</p>
+                <div class="onboarding-tips"><ul>
+                    <li>位置调换是可选操作，选择后立即生效</li>
+                    <li>顶部导航每个步骤变绿表示已完成</li>
+                </ul></div>
+            </div>
+
+        </div>
+        <div class="onboarding-footer">
+            <span class="onboarding-footer-skip" onclick="closeOnboarding()">跳过引导</span>
+            <div style="display:flex;gap:8px;align-items:center">
+                <button class="btn btn-secondary btn-sm" id="onboardingPrevBtn" onclick="onboardingNav(-1)" style="display:none">&#9664; 上一步</button>
+                <button class="btn btn-primary btn-sm" id="onboardingNextBtn" onclick="onboardingNav(1)">下一步 &#9654;</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ==================== 日志面板 ==================== -->
+<div id="logPanel" style="display:none;position:fixed;bottom:0;left:0;right:0;height:280px;background:#1a1a2e;border-top:2px solid #4f46e5;z-index:9000;display:none;flex-direction:column">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:#16213e;flex-shrink:0">
+        <span style="color:#a5b4fc;font-size:0.85em;font-weight:600;font-family:monospace">&#128196; 服务器日志</span>
+        <div style="display:flex;gap:10px;align-items:center">
+            <label style="color:#a5b4fc;font-size:0.8em;display:flex;align-items:center;gap:5px;cursor:pointer">
+                <input type="checkbox" id="logAutoScroll" checked> 自动滚动
+            </label>
+            <button onclick="clearLogDisplay()" style="background:none;border:1px solid #4f46e5;color:#a5b4fc;padding:2px 10px;border-radius:4px;cursor:pointer;font-size:0.78em">清空显示</button>
+            <button onclick="toggleLogPanel()" style="background:none;border:none;color:#a5b4fc;font-size:1.1em;cursor:pointer;padding:0 4px">&#10005;</button>
+        </div>
+    </div>
+    <div id="logContent" style="flex:1;overflow-y:auto;padding:8px 14px;font-family:monospace;font-size:0.8em;line-height:1.6;color:#c7d2fe"></div>
+</div>
+
+<!-- ==================== Toast ==================== -->
+<div id="toast" class="toast"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
