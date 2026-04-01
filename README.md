@@ -100,8 +100,8 @@ LLM 在翻译字幕时会产生多种问题：
 
 ```bash
 # 克隆项目
-git clone https://github.com/mikuleader/YiMu-Subtitle-Translator-.git
-cd YiMu-Subtitle-Translator-
+git clone https://github.com/mikuleader/YiMu-Subtitle-Translator.git
+cd YiMu-Subtitle-Translator
 
 # 创建虚拟环境并安装依赖
 python -m venv .venv
