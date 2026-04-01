@@ -16,9 +16,8 @@ VideoCaptioner-1.3.3/
 # 测试数据
 测试/
 
-# 截图（仅排除非 README 用的）
-截图/GitHub截图.png
-截图/首页.png
+# 截图（原始文件，docs/images 下的才上传）
+截图/
 
 # 压缩包
 *.rar
