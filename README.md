@@ -145,7 +145,7 @@ python app.py
 如果需要从音视频生成字幕，需额外安装：
 
 1. **[FFmpeg](https://ffmpeg.org/download.html)** — 用于提取音频
-2. **[faster-whisper-xxl](https://github.com/Purfview/whisper-standalone-win)** — 下载后放到项目 `tools/` 目录或系统 PATH 中
+2. **Faster-Whisper-XXL** — 从 [Purfview/whisper-standalone-win](https://github.com/Purfview/whisper-standalone-win/releases) 下载，解压后放到项目 `tools/` 目录或系统 PATH 中
 
 启动后界面会自动检测转录引擎是否可用。
 
