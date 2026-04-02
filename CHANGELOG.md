@@ -61,3 +61,4 @@
 - Whisper 转录双引擎：`faster-whisper-xxl.exe` CLI 优先，`faster_whisper` Python 库备选
 - VAD 自动降级：过滤 >75% 音频时自动关闭 VAD 重试
 
+

@@ -235,3 +235,11 @@ python app.py
 ## 许可证
 
 [MIT License](LICENSE)
+
+---
+
+<div align="center">
+
+Made by [@mikuleader](https://github.com/mikuleader)
+
+</div>
