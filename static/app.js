@@ -164,6 +164,40 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
+// ==================== Global Prompts UI ====================
+let globalPromptsData = [];
+
+function renderGlobalPromptsUI() {
+    const list = document.getElementById('cfgGlobalPromptsList');
+    if (!list) return;
+    list.innerHTML = globalPromptsData.map((p, i) => `
+        <div style="background:var(--bg-secondary,#f8f9fa);border:1px solid var(--border,#dee2e6);border-radius:6px;padding:8px;position:relative">
+            <button type="button" onclick="removeGlobalPromptUI(${i})" style="position:absolute;top:5px;right:5px;background:none;border:none;color:var(--danger,#dc3545);cursor:pointer;font-size:1.2em" title="删除">&times;</button>
+            <div style="margin-bottom:6px">
+                <label style="font-size:0.85em;font-weight:600">角色：</label>
+                <select class="input-sm" onchange="globalPromptsData[${i}].role = this.value">
+                    <option value="system" ${p.role==='system'?'selected':''}>system (系统)</option>
+                    <option value="user" ${p.role==='user'?'selected':''}>user (用户)</option>
+                    <option value="assistant" ${p.role==='assistant'||p.role==='ai'?'selected':''}>assistant (AI)</option>
+                </select>
+            </div>
+            <div>
+                <textarea class="textarea" style="height:60px;font-size:0.85em" placeholder="提示词内容" onchange="globalPromptsData[${i}].content = this.value">${escapeHtml(p.content||'')}</textarea>
+            </div>
+        </div>
+    `).join('');
+}
+
+function addGlobalPromptUI() {
+    globalPromptsData.push({ role: 'system', content: '' });
+    renderGlobalPromptsUI();
+}
+
+function removeGlobalPromptUI(index) {
+    globalPromptsData.splice(index, 1);
+    renderGlobalPromptsUI();
+}
+
 // ==================== Tab Switching ====================
 function switchTab(n) {
     document.querySelectorAll('.tab-panel').forEach(p => p.style.display = 'none');
@@ -1593,6 +1627,9 @@ async function loadConfig() {
             if (typeof onEngineChange === 'function') onEngineChange();
         }
         if (cfg.whisper_ff_mdx_kim2 !== undefined) document.getElementById('transcribeFfMdx').checked = cfg.whisper_ff_mdx_kim2;
+        
+        globalPromptsData = cfg.global_prompts || [];
+        renderGlobalPromptsUI();
     } catch (e) {
         console.error('Failed to load config:', e);
     }
@@ -1610,6 +1647,7 @@ async function saveSettings() {
         parallel_batches: parseInt(document.getElementById('cfgParallelBatches').value) || 3,
         enable_content_analysis: document.getElementById('cfgEnableContentAnalysis').checked,
         default_prompt: document.getElementById('cfgDefaultPrompt').value,
+        global_prompts: globalPromptsData.filter(p => (p.content || '').trim() !== '')
     };
     try {
         await fetch('/api/config', {

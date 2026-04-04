@@ -508,6 +508,11 @@
                 </div>
             </div>
             <div class="settings-section">
+                <div class="settings-section-title">全局预设提示词<span class="tooltip-wrap">?<span class="tooltip-text">在所有请求的开头插入这些提示词，用于设定人设或全局规则。支持 system, assistant (ai), user 角色。</span></span></div>
+                <div id="cfgGlobalPromptsList" style="display:flex;flex-direction:column;gap:10px;margin-bottom:10px"></div>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="addGlobalPromptUI()">+ 添加一条全局提示词</button>
+            </div>
+            <div class="settings-section">
                 <div class="settings-section-title">矫正分析提示词</div>
                 <p style="font-size:0.82em;color:var(--muted);margin:0 0 8px">告诉 AI 这个视频的背景信息和常见的识别错误。<code>【复制粘贴视频的标题和简介】</code> 会被 Tab 3 填写的视频背景自动替换。输出格式由系统自动处理，无需在此填写。</p>
                 <div class="form-group" style="margin-bottom:0">

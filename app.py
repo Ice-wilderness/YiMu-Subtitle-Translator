@@ -74,7 +74,8 @@ DEFAULT_CONFIG = {
     "whisper_cli_model_dir": "",
     "default_prompt": """这是某个视频的语音转文字字幕，可能存在口音导致的识别错误，请找出误识别的词语。
 常见错误：Claude 被识别成 Cloud，LLM 被识别成 LM 或 LOLM，DeepSeek 被识别成 deep sea，Gemini 被识别成 gem，ChatGPT/Claude/Anthropic/DeepSeek/Gemini 经常识别错误。
-视频内容是：【复制粘贴视频的标题和简介】"""
+视频内容是：【复制粘贴视频的标题和简介】""",
+    "global_prompts": []
 }
 
 
@@ -113,6 +114,7 @@ class LLMService:
         self.analysis_base_url = cfg['analysis_base_url'].rstrip('/')
         self.translation_api_key = cfg['translation_api_key']
         self.translation_base_url = cfg['translation_base_url'].rstrip('/')
+        self.global_prompts = cfg.get('global_prompts', [])
 
     def _call_chat_completions(self, messages, model, temperature=0.1, base_url=None, api_key=None):
         url = f'{base_url}/chat/completions'
@@ -120,9 +122,20 @@ class LLMService:
             'Authorization': f'Bearer {api_key}',
             'Content-Type': 'application/json'
         }
+        
+        final_messages = []
+        for gp in self.global_prompts:
+            role = gp.get('role', 'system')
+            if role == 'ai':
+                role = 'assistant'
+            content = gp.get('content', '').strip()
+            if content:
+                final_messages.append({'role': role, 'content': content})
+        final_messages.extend(messages)
+        
         payload = {
             'model': model,
-            'messages': messages,
+            'messages': final_messages,
             'temperature': temperature
         }
         response = requests.post(url, headers=headers, json=payload, timeout=180)
@@ -352,7 +365,7 @@ class SRTBackend:
         def _translate_one_batch(batch_idx: int, batch: List[SubtitleEntry]):
             """翻译单个批次，含行数校验和重试"""
             batch_num = batch_idx + 1
-            for attempt in range(3):
+            for attempt in range(5):
                 try:
                     raw_resp, usage = llm.translate_batch(
                         batch, cfg['translation_model'], glossary_hint=glossary_hint)
@@ -374,7 +387,7 @@ class SRTBackend:
                 except Exception as e:
                     logger.warning("第 %d 批翻译失败 (第 %d 次): %s", batch_num, attempt + 1, e)
                     time.sleep(1)
-            raise Exception(f"第 {batch_num} 批翻译失败，已重试 3 次。请检查网络连接和 API 配置。")
+            raise Exception(f"第 {batch_num} 批翻译失败，已重试 5 次。请检查网络连接和 API 配置。")
 
         # 并行翻译
         results = [None] * total_batches
@@ -1591,7 +1604,8 @@ if __name__ == '__main__':
     logger.info("  日志文件: %s", _LOG_FILE)
     logger.info("=" * 48)
     try:
-        serve(app, host='0.0.0.0', port=9999)
+        # 设置 max_request_body_size 为 100GB (10 * 1024 * 1024 * 1024 字节) 以支持大视频文件上传
+        serve(app, host='0.0.0.0', port=9999, max_request_body_size=107374182400)
     except Exception as e:
         logger.exception("服务器异常退出: %s", e)
         raise
