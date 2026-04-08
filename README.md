@@ -187,16 +187,28 @@ python app.py
 | 分析模型 | 字幕纠错，需推理能力强 | Gemini 2.5 Flash / Pro |
 | 翻译模型 | 字幕翻译，需语言表达能力强 | GPT-4o / GPT-5.1 |
 
-两个模型可配置不同的 API Key 和 Base URL。其他模型未测试，欢迎尝试反馈。
+两个模型可配置不同的 API Key 和 Base URL，也可分别填写：
+
+- 额外请求头（JSON 对象）
+- 额外请求体（JSON 对象）
+- 源语言 / 目标语言
+
+这适合接入需要自定义 Header、供应商扩展参数或特殊网关的 OpenAI 兼容接口。
+
+设置面板内置 `DeepSeek`、`GLM / 智谱`、`豆包 / 火山方舟`、`OpenAI 官方` 的快速套用。其他模型未测试，欢迎尝试反馈。
 
 ### 音视频转录（可选）
 
 已有 SRT 文件可跳过。如需从音视频生成字幕：
 
 1. **[FFmpeg](https://ffmpeg.org/download.html)** — 用于提取音频
-2. **Faster-Whisper CLI** — 从 [whisper-standalone-win](https://github.com/Purfview/whisper-standalone-win/releases) 下载，将 `faster-whisper-xxl.exe` 放到项目 `tools/` 目录或系统 PATH
+2. **Faster-Whisper CLI** — 从 [whisper-standalone-win](https://github.com/Purfview/whisper-standalone-win/releases) 下载，将 `faster-whisper-xxl.exe` 放到 `tools/faster-whisper-xxl/` 目录或系统 PATH
 
 启动后界面会自动检测转录引擎是否可用。
+
+- 检测到 `faster-whisper-xxl CLI` 时，默认优先使用 CLI，速度更快
+- 未检测到时，会自动回退到 Python `faster-whisper` 库
+- 工作台可直接打开本地 `tools` 目录，方便放入 CLI 可执行文件和模型
 
 ---
 
@@ -209,6 +221,16 @@ python app.py
 | AI 调用 | OpenAI 兼容接口 |
 | 转录 | Faster Whisper（CLI 优先，Python 库备选） |
 | 数据 | 纯浏览器内存，无数据库 |
+
+---
+
+## 本次新增能力
+
+- 支持在设置中分别配置源语言和目标语言，不再局限于固定英译中流程
+- 分析模型和翻译模型均支持自定义额外请求头、额外请求体，便于适配不同 API 供应商
+- 双语导出支持根据源语言/目标语言调整上下位置
+- 转录能力增加对本地 `faster-whisper-xxl CLI` 的自动检测与优先使用
+- 项目默认忽略本地 `tools/` 工具目录，避免误把大体积二进制和模型文件提交到仓库
 
 ---
 
