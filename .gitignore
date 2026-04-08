@@ -12,6 +12,7 @@ logs/
 
 # 第三方工具（用户自行下载）
 VideoCaptioner-1.3.3/
+tools/
 
 # 测试数据
 测试/
@@ -33,5 +34,4 @@ docs/post-reply.md
 .DS_Store
 Thumbs.db
 desktop.ini
-
 

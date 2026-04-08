@@ -9,6 +9,9 @@ const AppState = {
     currentStep: 1,
     subtitleLang: 'unknown',
     mergeMode: 'words',    // 'words' for Latin, 'chars' for CJK/Korean
+    sourceLanguage: 'en',
+    targetLanguage: 'zh-Hans',
+    bilingualOrder: 'source_on_top',
     // AI tab
     correctionVersion: 0,
     aiSuggestions: [],
@@ -31,6 +34,223 @@ const AppState = {
     previewSearchResults: [],
     previewSearchResultIndex: 0,
 };
+
+const LANGUAGE_OPTIONS = [
+    { code: 'en', name: '英语', sample: 'Hello World', script: 'latin' },
+    { code: 'zh-Hans', name: '简体中文', sample: '你好世界', script: 'cjk' },
+    { code: 'zh-Hant', name: '繁体中文', sample: '你好世界', script: 'cjk' },
+    { code: 'ja', name: '日语', sample: 'こんにちは世界', script: 'cjk' },
+    { code: 'yue', name: '粤语', sample: '你好世界', script: 'cjk' },
+    { code: 'ko', name: '韩语', sample: '안녕하세요', script: 'hangul' },
+    { code: 'fr', name: '法语', sample: 'Bonjour le monde', script: 'latin' },
+    { code: 'de', name: '德语', sample: 'Hallo Welt', script: 'latin' },
+    { code: 'es', name: '西班牙语', sample: 'Hola mundo', script: 'latin' },
+    { code: 'pt', name: '葡萄牙语', sample: 'Ola mundo', script: 'latin' },
+    { code: 'it', name: '意大利语', sample: 'Ciao mondo', script: 'latin' },
+    { code: 'nl', name: '荷兰语', sample: 'Hallo wereld', script: 'latin' },
+    { code: 'tr', name: '土耳其语', sample: 'Merhaba dunya', script: 'latin' },
+    { code: 'id', name: '印尼语', sample: 'Halo dunia', script: 'latin' },
+    { code: 'vi', name: '越南语', sample: 'Xin chao the gioi', script: 'latin' },
+    { code: 'sv', name: '瑞典语', sample: 'Hej varlden', script: 'latin' },
+    { code: 'ru', name: '俄语', sample: 'Привет мир', script: 'cyrillic' },
+    { code: 'ar', name: '阿拉伯语', sample: 'مرحبا بالعالم', script: 'arabic' },
+    { code: 'hi', name: '印地语', sample: 'नमस्ते दुनिया', script: 'devanagari' },
+    { code: 'th', name: '泰语', sample: 'สวัสดีชาวโลก', script: 'thai' },
+];
+
+const MODEL_PRESETS = {
+    openai: {
+        label: 'OpenAI 官方',
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-4o-mini',
+        extraHeaders: {},
+        extraBody: {},
+    },
+    deepseek: {
+        label: 'DeepSeek',
+        baseUrl: 'https://api.deepseek.com/v1',
+        model: 'deepseek-chat',
+        extraHeaders: {},
+        extraBody: {},
+    },
+    glm: {
+        label: 'GLM / 智谱',
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        model: 'glm-4.5',
+        extraHeaders: {},
+        extraBody: {},
+    },
+    doubao: {
+        label: '豆包 / 火山方舟',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+        model: '',
+        extraHeaders: {},
+        extraBody: {},
+    },
+};
+
+function getLanguageMeta(code) {
+    return LANGUAGE_OPTIONS.find(item => item.code === code)
+        || { code, name: code || '未知语言', sample: code || 'Unknown', script: 'other' };
+}
+
+function populateLanguageSelect(selectId, value) {
+    const select = document.getElementById(selectId);
+    if (!select) return;
+    select.innerHTML = LANGUAGE_OPTIONS.map(item =>
+        `<option value="${item.code}">${item.name}</option>`
+    ).join('');
+    select.value = value || select.value || 'en';
+}
+
+function refreshLanguageUI() {
+    const source = getLanguageMeta(AppState.sourceLanguage);
+    const target = getLanguageMeta(AppState.targetLanguage);
+
+    const subtitle = document.getElementById('swapSubtitle');
+    if (subtitle) subtitle.textContent = `选择双语字幕中${source.name}和${target.name}的上下排列顺序，选择后立即生效。`;
+
+    const currentOrder = getCurrentBilingualOrder();
+    const currentTop = currentOrder === 'target_on_top' ? target.sample : source.sample;
+    const currentBottom = currentOrder === 'target_on_top' ? source.sample : target.sample;
+    const textMap = {
+        swapDemo1BeforeTop: currentTop,
+        swapDemo1BeforeBottom: currentBottom,
+        swapDemo1AfterTop: target.sample,
+        swapDemo1AfterBottom: source.sample,
+        swapDemo2BeforeTop: currentTop,
+        swapDemo2BeforeBottom: currentBottom,
+        swapDemo2AfterTop: source.sample,
+        swapDemo2AfterBottom: target.sample,
+    };
+    Object.entries(textMap).forEach(([id, text]) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+    });
+}
+
+function getCurrentBilingualOrder() {
+    if (AppState.bilingualOrder) return AppState.bilingualOrder;
+    return inferBilingualOrderFromSubtitles(AppState.subtitles);
+}
+
+function inferBilingualOrderFromSubtitles(subtitles) {
+    const firstSub = subtitles.find(sub => sub.text && sub.text.trim());
+    if (!firstSub) return 'source_on_top';
+
+    if (firstSub.sourceText || firstSub.translationText) {
+        const lines = firstSub.text.split('\n').map(line => line.trim()).filter(Boolean);
+        if (lines.length >= 2) {
+            if (firstSub.translationText && lines[0] === firstSub.translationText.trim()) return 'target_on_top';
+            if (firstSub.sourceText && lines[0] === firstSub.sourceText.trim()) return 'source_on_top';
+        }
+    }
+
+    const lines = firstSub.text.split('\n').map(line => line.trim()).filter(Boolean);
+    if (lines.length >= 2) {
+        if (isTextMostlyInLanguage(lines[0], AppState.targetLanguage)) return 'target_on_top';
+        if (isTextMostlyInLanguage(lines[0], AppState.sourceLanguage)) return 'source_on_top';
+    }
+
+    return 'source_on_top';
+}
+
+function composeBilingualText(sourceText, translationText, order = AppState.bilingualOrder) {
+    const source = (sourceText || '').trim();
+    const translation = (translationText || '').trim();
+    if (order === 'target_on_top') {
+        return [translation, source].filter(Boolean).join('\n');
+    }
+    return [source, translation].filter(Boolean).join('\n');
+}
+
+function initializeSubtitlesAsMonolingual(subs) {
+    subs.forEach(sub => {
+        sub.sourceText = (sub.text || '').trim();
+        sub.translationText = '';
+    });
+    AppState.bilingualOrder = 'source_on_top';
+}
+
+function initializeImportedSubtitles(subs) {
+    initializeSubtitlesAsMonolingual(subs);
+    return 'monolingual';
+}
+
+function resetSubtitleWorkflowState() {
+    AppState.correctionVersion = 0;
+    AppState.aiSuggestions = [];
+    AppState.ignoredSuggestions.clear();
+    AppState.changeLocations = [];
+    AppState.currentNavIndex = -1;
+    AppState.mergeTargets = [];
+    AppState.mergeCurrentIndex = 0;
+    AppState.mergedSubtitles = [];
+    AppState.markedSubtitles = [];
+    AppState.modifiedSubtitles.clear();
+    AppState.ccProblemIndices = [];
+    AppState.dcProblemIndices = [];
+    AppState.previewSearchResults = [];
+    AppState.previewSearchResultIndex = 0;
+    AppState.editorSearchResults = [];
+    AppState.editorResultIndex = 0;
+}
+
+function syncSubtitleBilingualFields(sub, preserveText = true) {
+    sub.sourceText = '';
+    sub.translationText = '';
+
+    const lines = (sub.text || '').split('\n').map(line => line.trim()).filter(Boolean);
+    if (lines.length < 2) return;
+
+    const first = lines[0];
+    const second = lines[1];
+    const firstIsSource = isTextMostlyInLanguage(first, AppState.sourceLanguage);
+    const firstIsTarget = isTextMostlyInLanguage(first, AppState.targetLanguage);
+    const secondIsSource = isTextMostlyInLanguage(second, AppState.sourceLanguage);
+    const secondIsTarget = isTextMostlyInLanguage(second, AppState.targetLanguage);
+
+    if (firstIsSource && secondIsTarget) {
+        sub.sourceText = first;
+        sub.translationText = second;
+    } else if (firstIsTarget && secondIsSource) {
+        sub.sourceText = second;
+        sub.translationText = first;
+    } else if (AppState.bilingualOrder === 'target_on_top') {
+        sub.sourceText = second;
+        sub.translationText = first;
+    } else {
+        sub.sourceText = first;
+        sub.translationText = second;
+    }
+
+    if (!preserveText) {
+        const rest = lines.slice(2);
+        const base = composeBilingualText(sub.sourceText, sub.translationText);
+        sub.text = [base].concat(rest).filter(Boolean).join('\n');
+    }
+}
+
+function assignBilingualFields(subs) {
+    subs.forEach(sub => syncSubtitleBilingualFields(sub, true));
+}
+
+function formatJsonForTextarea(value) {
+    return JSON.stringify(value || {}, null, 2);
+}
+
+function applyModelPreset(kind) {
+    const presetSelect = document.getElementById(kind === 'analysis' ? 'cfgAnalysisPreset' : 'cfgTranslationPreset');
+    const preset = MODEL_PRESETS[presetSelect.value];
+    if (!preset) return;
+
+    const prefix = kind === 'analysis' ? 'cfgAnalysis' : 'cfgTranslation';
+    document.getElementById(`${prefix}BaseUrl`).value = preset.baseUrl || '';
+    document.getElementById(`${prefix}Model`).value = preset.model || '';
+    document.getElementById(`${prefix}ExtraHeaders`).value = formatJsonForTextarea(preset.extraHeaders);
+    document.getElementById(`${prefix}ExtraBody`).value = formatJsonForTextarea(preset.extraBody);
+    showToast(`已套用 ${preset.label} 模板`);
+}
 
 // ==================== SRT Parser & Serializer ====================
 function parseSRT(content) {
@@ -92,16 +312,28 @@ function formatDurationHMS(sec) {
     return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
 }
 
-function isChinese(text) { return /[\u4e00-\u9fa5]/.test(text); }
-function countChineseChars(text) { return (text.match(/[\u4e00-\u9fa5]/g) || []).length; }
 function escapeRegExp(str) { return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-function isTranslationLine(text) {
-    // 判断是否为中文译文行：中文字符占比超过 50%
+function countScriptMatches(text, script) {
+    if (script === 'cjk') return (text.match(/[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff]/g) || []).length;
+    if (script === 'hangul') return (text.match(/[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]/g) || []).length;
+    if (script === 'latin') return (text.match(/[A-Za-zÀ-ÖØ-öø-ÿ]/g) || []).length;
+    if (script === 'cyrillic') return (text.match(/[\u0400-\u04ff]/g) || []).length;
+    if (script === 'arabic') return (text.match(/[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff]/g) || []).length;
+    if (script === 'devanagari') return (text.match(/[\u0900-\u097f]/g) || []).length;
+    if (script === 'thai') return (text.match(/[\u0e00-\u0e7f]/g) || []).length;
+    return (text.match(/\S/g) || []).length;
+}
+
+function isTextMostlyInLanguage(text, langCode) {
     const chars = text.replace(/\s/g, '');
     if (!chars.length) return false;
-    const cn = (chars.match(/[\u4e00-\u9fa5]/g) || []).length;
-    return cn / chars.length > 0.5;
+    const script = getLanguageMeta(langCode).script;
+    return countScriptMatches(chars, script) / chars.length > 0.4;
+}
+
+function isTranslationLine(text) {
+    return isTextMostlyInLanguage(text, AppState.targetLanguage);
 }
 
 function groupLinesByLanguage(text) {
@@ -119,29 +351,23 @@ function groupLinesByLanguage(text) {
 function mergeTextByLanguage(sub1, sub2) {
     // 字段分离方案：优先使用 sourceText/translationText 字段
     if (sub1.sourceText && sub2.sourceText) {
-        const isCJK = (AppState.mergeMode === 'chars');
+        const isCJK = (getLanguageMeta(AppState.targetLanguage).script !== 'latin');
         const srcJoiner = ' ';
         const trlJoiner = isCJK ? '' : ' ';
         const src = sub1.sourceText + srcJoiner + sub2.sourceText;
         const trl = [sub1.translationText, sub2.translationText].filter(Boolean).join(trlJoiner);
-        const lines = [];
-        if (src) lines.push(src);
-        if (trl) lines.push(trl);
-        return { text: lines.join('\n'), sourceText: src, translationText: trl };
+        return { text: composeBilingualText(src, trl), sourceText: src, translationText: trl };
     }
     // Fallback：未经本工具翻译的字幕，用旧逻辑按语言检测分组
     const t1 = typeof sub1 === 'string' ? sub1 : sub1.text;
     const t2 = typeof sub2 === 'string' ? sub2 : sub2.text;
     const g1 = groupLinesByLanguage(t1);
     const g2 = groupLinesByLanguage(t2);
-    const isCJK = (AppState.mergeMode === 'chars');
+    const isCJK = (getLanguageMeta(AppState.targetLanguage).script !== 'latin');
     const joiner = isCJK ? '' : ' ';
     const src = [...g1.source, ...g2.source].join(joiner);
     const trl = [...g1.translation, ...g2.translation].join(joiner);
-    const lines = [];
-    if (src) lines.push(src);
-    if (trl) lines.push(trl);
-    return { text: lines.join('\n'), sourceText: src, translationText: trl };
+    return { text: composeBilingualText(src, trl), sourceText: src, translationText: trl };
 }
 
 function showToast(msg, type) {
@@ -192,6 +418,17 @@ document.addEventListener('DOMContentLoaded', () => {
         fileInput.value = '';
     });
 
+    populateLanguageSelect('cfgSourceLanguage', AppState.sourceLanguage);
+    populateLanguageSelect('cfgTargetLanguage', AppState.targetLanguage);
+    refreshLanguageUI();
+    document.getElementById('cfgSourceLanguage').addEventListener('change', e => {
+        AppState.sourceLanguage = e.target.value;
+        refreshLanguageUI();
+    });
+    document.getElementById('cfgTargetLanguage').addEventListener('change', e => {
+        AppState.targetLanguage = e.target.value;
+        refreshLanguageUI();
+    });
     loadConfig();
 
     // 全局监听：任何步骤修改字幕后，编辑器自动同步
@@ -199,6 +436,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const panel = document.getElementById('editorPanel');
         if (panel.classList.contains('open') && AppState.subtitles.length > 0) {
             editorRender(AppState.subtitles);
+        }
+        if (AppState.currentStep === 4 && AppState.subtitles.length > 0) {
+            refreshDownloadTab();
         }
     });
 });
@@ -225,12 +465,9 @@ function handleFileUpload(file) {
     reader.onload = e => {
         AppState.subtitles = parseSRT(e.target.result);
         if (AppState.subtitles.length === 0) { showToast('解析 SRT 失败', 'error'); return; }
+        initializeImportedSubtitles(AppState.subtitles);
         reindexSubtitles();
-        // Reset states
-        AppState.correctionVersion = 0;
-        AppState.aiSuggestions = [];
-        AppState.ignoredSuggestions.clear();
-        AppState.modifiedSubtitles.clear();
+        resetSubtitleWorkflowState();
         // Auto-detect language and set merge defaults (also triggers previewMerge)
         AppState.subtitleLang = detectSubtitleLanguage(AppState.subtitles);
         setMergeDefaults(AppState.subtitleLang);
@@ -257,11 +494,19 @@ function detectSubtitleLanguage(subtitles) {
     const nonSpace = sample.replace(/\s/g, '');
     if (!nonSpace.length) return 'unknown';
     const cjk     = (sample.match(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u3041-\u3096\u30a1-\u30fc]/g) || []).length;
-    const hangul   = (sample.match(/[\uac00-\ud7a3\u1100-\u11ff]/g) || []).length;
-    const latin    = (sample.match(/[a-zA-Z]/g) || []).length;
+    const hangul  = (sample.match(/[\uac00-\ud7a3\u1100-\u11ff]/g) || []).length;
+    const latin   = (sample.match(/[A-Za-zÀ-ÖØ-öø-ÿ]/g) || []).length;
+    const cyrillic = (sample.match(/[\u0400-\u04ff]/g) || []).length;
+    const arabic  = (sample.match(/[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff]/g) || []).length;
+    const devanagari = (sample.match(/[\u0900-\u097f]/g) || []).length;
+    const thai = (sample.match(/[\u0e00-\u0e7f]/g) || []).length;
     const total    = nonSpace.length;
     if ((cjk + hangul) / total > 0.25) return hangul > cjk ? 'korean' : 'cjk';
     if (latin / total > 0.25) return 'latin';
+    if (cyrillic / total > 0.25) return 'cyrillic';
+    if (arabic / total > 0.25) return 'arabic';
+    if (devanagari / total > 0.25) return 'devanagari';
+    if (thai / total > 0.25) return 'thai';
     return 'unknown';
 }
 
@@ -271,10 +516,19 @@ function setMergeDefaults(lang) {
     const label   = document.getElementById('mergeLimitLabel');
     const hint    = document.getElementById('detectedLang');
 
-    const isCJK = lang === 'cjk' || lang === 'korean';
+    const isCJK = lang === 'cjk' || lang === 'korean' || lang === 'thai';
     AppState.mergeMode = isCJK ? 'chars' : 'words';
 
-    const langNames = { cjk: '中文 / 日文', korean: '韩文', latin: '英文 / 拉丁语', unknown: '英文 / 拉丁语（默认）' };
+    const langNames = {
+        cjk: '中日韩文字',
+        korean: '韩文',
+        latin: '拉丁语系',
+        cyrillic: '西里尔文字',
+        arabic: '阿拉伯文字',
+        devanagari: '天城文字',
+        thai: '泰文',
+        unknown: '未识别（按分词语言处理）'
+    };
     if (hint) hint.textContent = langNames[lang] || '未知';
 
     if (isCJK) {
@@ -291,7 +545,7 @@ function previewMerge() {
     if (AppState.subtitles.length === 0) return;
     const maxVal = parseInt(document.getElementById('mergeMaxWords').value);
     const copy = AppState.subtitles.map(s => ({ ...s }));
-    performEnglishMerge(copy, maxVal);
+    performShortSubtitleMerge(copy, maxVal);
     const before = AppState.subtitles.length;
     const after = copy.length;
     document.getElementById('mergeBefore').textContent = before;
@@ -299,11 +553,11 @@ function previewMerge() {
     document.getElementById('mergeDiff').textContent = before - after;
 }
 
-function runEnglishMerge() {
+function runShortSubtitleMerge() {
     if (AppState.subtitles.length === 0) { showToast('请先上传文件', 'error'); return; }
     const before = AppState.subtitles.length;
     const maxChars = parseInt(document.getElementById('mergeMaxWords').value);
-    performEnglishMerge(AppState.subtitles, maxChars);
+    performShortSubtitleMerge(AppState.subtitles, maxChars);
     reindexSubtitles();
     const after = AppState.subtitles.length;
 
@@ -317,7 +571,7 @@ function runEnglishMerge() {
     switchTab(3);
 }
 
-function performEnglishMerge(subs, maxVal) {
+function performShortSubtitleMerge(subs, maxVal) {
     // Use mergeMode from AppState (set by language detection)
     const isCJK = AppState.mergeMode === 'chars';
     const joiner = isCJK ? '' : ' ';
@@ -799,16 +1053,8 @@ async function startFinalTranslation() {
         // Parse translation result back into subtitles
         const translated = parseSRT(data.result);
         if (translated.length > 0) {
-            // 后端输出格式: 原文(单行)\n译文(单行)，拆分到独立字段
-            translated.forEach(sub => {
-                const nlIdx = sub.text.indexOf('\n');
-                if (nlIdx !== -1) {
-                    sub.sourceText = sub.text.substring(0, nlIdx);
-                    sub.translationText = sub.text.substring(nlIdx + 1);
-                } else {
-                    sub.sourceText = sub.text;
-                }
-            });
+            assignBilingualFields(translated);
+            AppState.bilingualOrder = inferBilingualOrderFromSubtitles(translated);
             AppState.subtitles = translated;
             reindexSubtitles();
         }
@@ -899,15 +1145,8 @@ async function startOneclickTranslation() {
         // 解析翻译结果
         const translated = parseSRT(data.result);
         if (translated.length > 0) {
-            translated.forEach(sub => {
-                const nlIdx = sub.text.indexOf('\n');
-                if (nlIdx !== -1) {
-                    sub.sourceText = sub.text.substring(0, nlIdx);
-                    sub.translationText = sub.text.substring(nlIdx + 1);
-                } else {
-                    sub.sourceText = sub.text;
-                }
-            });
+            assignBilingualFields(translated);
+            AppState.bilingualOrder = inferBilingualOrderFromSubtitles(translated);
             AppState.subtitles = translated;
             reindexSubtitles();
         }
@@ -951,12 +1190,13 @@ async function startOneclickTranslation() {
 function runCombinedCheck() {
     if (AppState.subtitles.length === 0) { showToast('请先上传文件', 'error'); return; }
 
-    // 中文字符检测
+    // 目标语言内容长度检测
     const minChars = parseInt(document.getElementById('minChineseChars').value) || 5;
     const ccProblems = [];
     AppState.subtitles.forEach(s => {
-        const cnt = countChineseChars(s.text);
-        if (cnt < minChars) ccProblems.push({ ...s, chineseCount: cnt });
+        const text = s.translationText || s.text.split('\n').slice(1).join('\n') || s.text;
+        const cnt = countScriptMatches(text, getLanguageMeta(AppState.targetLanguage).script);
+        if (cnt < minChars) ccProblems.push({ ...s, targetCount: cnt });
     });
     AppState.ccProblemIndices = ccProblems.map(p => p.index);
 
@@ -973,7 +1213,7 @@ function runCombinedCheck() {
             <div class="problem-item">
                 <div class="p-header"><span class="p-index">#${p.index}</span><span class="p-time">${p.startTime} --> ${p.endTime}</span></div>
                 <div class="p-text">${escapeHtml(p.text)}</div>
-                <span class="p-badge">中文字数: ${p.chineseCount}</span>
+                <span class="p-badge">目标长度: ${p.targetCount}</span>
             </div>
         `).join('');
     }
@@ -1211,18 +1451,32 @@ function unmark(i) {
 function runPositionSwap() {
     if (AppState.subtitles.length === 0) { showToast('请先上传文件', 'error'); return; }
     const direction = document.querySelector('input[name="swapDirection"]:checked').value;
+    AppState.bilingualOrder = direction;
     let swapCount = 0;
 
     AppState.subtitles.forEach(s => {
+        if (s.sourceText || s.translationText) {
+            const source = s.sourceText || '';
+            const translation = s.translationText || '';
+            const nextText = composeBilingualText(source, translation, direction);
+            if (nextText && nextText !== s.text) {
+                s.text = nextText;
+                swapCount++;
+            }
+            return;
+        }
+
         const lines = s.text.split('\n').filter(l => l.trim());
         if (lines.length >= 2) {
             const first = lines[0];
             const second = lines[1];
             let shouldSwap = false;
-            if (direction === 'en2cn') {
-                shouldSwap = !isChinese(first) && isChinese(second);
+            if (direction === 'target_on_top') {
+                shouldSwap = isTextMostlyInLanguage(first, AppState.sourceLanguage)
+                    && isTextMostlyInLanguage(second, AppState.targetLanguage);
             } else {
-                shouldSwap = isChinese(first) && !isChinese(second);
+                shouldSwap = isTextMostlyInLanguage(first, AppState.targetLanguage)
+                    && isTextMostlyInLanguage(second, AppState.sourceLanguage);
             }
             if (shouldSwap) {
                 const swapped = [second, first].concat(lines.slice(2));
@@ -1236,12 +1490,17 @@ function runPositionSwap() {
     document.getElementById('swapResult').style.display = '';
     document.querySelector('.step[data-step="4"]').classList.add('completed');
     showToast(`已交换 ${swapCount} 条字幕`);
+    refreshDownloadTab();
     document.dispatchEvent(new CustomEvent('subtitlesChanged'));
 }
 
 // ==================== 下载导出（Tab 5 下半部分） ====================
 function refreshDownloadTab() {
     if (AppState.subtitles.length === 0) return;
+    const currentOrder = getCurrentBilingualOrder();
+    const radio = document.querySelector(`input[name="swapDirection"][value="${currentOrder}"]`);
+    if (radio) radio.checked = true;
+    refreshLanguageUI();
     document.getElementById('finalCount').textContent = AppState.subtitles.length;
     const last = AppState.subtitles[AppState.subtitles.length - 1];
     document.getElementById('finalDuration').textContent = formatDurationHMS(timeToSeconds(last.endTime));
@@ -1478,6 +1737,7 @@ function editorSave(idx) {
     sub.text = newText;
     sub.startTime = newStart;
     sub.endTime = newEnd;
+    syncSubtitleBilingualFields(sub, true);
     if (newText !== sub.originalText || newStart !== sub.originalStartTime || newEnd !== sub.originalEndTime) {
         AppState.modifiedSubtitles.add(idx);
     } else {
@@ -1490,6 +1750,8 @@ function editorSave(idx) {
             mergeSub.text = newText;
             mergeSub.startTime = newStart;
             mergeSub.endTime = newEnd;
+            mergeSub.sourceText = sub.sourceText;
+            mergeSub.translationText = sub.translationText;
         }
         // 刷新合并界面显示
         if (AppState.mergeCurrentIndex < AppState.mergeTargets.length) {
@@ -1562,12 +1824,22 @@ async function loadConfig() {
     try {
         const res = await fetch('/api/config');
         const cfg = await res.json();
+        AppState.sourceLanguage = cfg.source_language || 'en';
+        AppState.targetLanguage = cfg.target_language || 'zh-Hans';
+        populateLanguageSelect('cfgSourceLanguage', AppState.sourceLanguage);
+        populateLanguageSelect('cfgTargetLanguage', AppState.targetLanguage);
         document.getElementById('cfgAnalysisApiKey').value = cfg.analysis_api_key || '';
         document.getElementById('cfgAnalysisBaseUrl').value = cfg.analysis_base_url || '';
         document.getElementById('cfgAnalysisModel').value = cfg.analysis_model || '';
+        document.getElementById('cfgAnalysisExtraHeaders').value = cfg.analysis_extra_headers || '{}';
+        document.getElementById('cfgAnalysisExtraBody').value = cfg.analysis_extra_body || '{}';
         document.getElementById('cfgTranslationApiKey').value = cfg.translation_api_key || '';
         document.getElementById('cfgTranslationBaseUrl').value = cfg.translation_base_url || '';
         document.getElementById('cfgTranslationModel').value = cfg.translation_model || '';
+        document.getElementById('cfgTranslationExtraHeaders').value = cfg.translation_extra_headers || '{}';
+        document.getElementById('cfgTranslationExtraBody').value = cfg.translation_extra_body || '{}';
+        document.getElementById('cfgSourceLanguage').value = AppState.sourceLanguage;
+        document.getElementById('cfgTargetLanguage').value = AppState.targetLanguage;
         document.getElementById('cfgBatchSize').value = cfg.batch_size || 100;
         document.getElementById('cfgParallelBatches').value = cfg.parallel_batches || 3;
         document.getElementById('cfgEnableContentAnalysis').checked = cfg.enable_content_analysis !== false;
@@ -1593,6 +1865,7 @@ async function loadConfig() {
             if (typeof onEngineChange === 'function') onEngineChange();
         }
         if (cfg.whisper_ff_mdx_kim2 !== undefined) document.getElementById('transcribeFfMdx').checked = cfg.whisper_ff_mdx_kim2;
+        refreshLanguageUI();
     } catch (e) {
         console.error('Failed to load config:', e);
     }
@@ -1603,9 +1876,15 @@ async function saveSettings() {
         analysis_api_key: document.getElementById('cfgAnalysisApiKey').value,
         analysis_base_url: document.getElementById('cfgAnalysisBaseUrl').value,
         analysis_model: document.getElementById('cfgAnalysisModel').value,
+        analysis_extra_headers: document.getElementById('cfgAnalysisExtraHeaders').value || '{}',
+        analysis_extra_body: document.getElementById('cfgAnalysisExtraBody').value || '{}',
         translation_api_key: document.getElementById('cfgTranslationApiKey').value,
         translation_base_url: document.getElementById('cfgTranslationBaseUrl').value,
         translation_model: document.getElementById('cfgTranslationModel').value,
+        translation_extra_headers: document.getElementById('cfgTranslationExtraHeaders').value || '{}',
+        translation_extra_body: document.getElementById('cfgTranslationExtraBody').value || '{}',
+        source_language: document.getElementById('cfgSourceLanguage').value,
+        target_language: document.getElementById('cfgTargetLanguage').value,
         batch_size: parseInt(document.getElementById('cfgBatchSize').value) || 100,
         parallel_batches: parseInt(document.getElementById('cfgParallelBatches').value) || 3,
         enable_content_analysis: document.getElementById('cfgEnableContentAnalysis').checked,
@@ -1618,7 +1897,10 @@ async function saveSettings() {
             body: JSON.stringify(cfg)
         });
         showToast('设置已保存！');
+        AppState.sourceLanguage = cfg.source_language;
+        AppState.targetLanguage = cfg.target_language;
         AppState.defaultPromptTemplate = cfg.default_prompt || '';
+        refreshLanguageUI();
         toggleSettings();
     } catch (e) {
         showToast('保存失败: ' + e.message, 'error');
@@ -1896,6 +2178,7 @@ function renderOnboarding() {
 
     function showTranscribeResult(srtText) {
         const subs = parseSRT(srtText);
+        initializeImportedSubtitles(subs);
         document.getElementById('transcribeSubCount').textContent = subs.length;
         if (subs.length > 0) {
             const last = subs[subs.length - 1];
@@ -1908,12 +2191,10 @@ function renderOnboarding() {
         if (!_transcribeResult) return;
         const subs = parseSRT(_transcribeResult);
         if (subs.length === 0) { showToast('SRT 解析失败', 'error'); return; }
+        initializeImportedSubtitles(subs);
         AppState.subtitles = subs;
         AppState.originalFileName = (_transcribeFile ? _transcribeFile.name.replace(/\.[^.]+$/, '') : 'transcribed') + '.srt';
-        AppState.correctionVersion = 0;
-        AppState.aiSuggestions = [];
-        AppState.ignoredSuggestions.clear();
-        AppState.modifiedSubtitles.clear();
+        resetSubtitleWorkflowState();
         reindexSubtitles();
         // Auto-detect language and set merge defaults (also triggers previewMerge)
         AppState.subtitleLang = detectSubtitleLanguage(AppState.subtitles);
@@ -2006,5 +2287,3 @@ function renderOnboarding() {
         _logTotal = 0;
     };
 })();
-
-

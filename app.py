@@ -62,9 +62,15 @@ DEFAULT_CONFIG = {
     "analysis_api_key": "",
     "analysis_base_url": "",
     "analysis_model": "",
+    "analysis_extra_headers": "{}",
+    "analysis_extra_body": "{}",
     "translation_api_key": "",
     "translation_base_url": "",
     "translation_model": "",
+    "translation_extra_headers": "{}",
+    "translation_extra_body": "{}",
+    "source_language": "en",
+    "target_language": "zh-Hans",
     "batch_size": 100,
     "parallel_batches": 3,
     "enable_content_analysis": True,
@@ -77,12 +83,110 @@ DEFAULT_CONFIG = {
 视频内容是：【复制粘贴视频的标题和简介】"""
 }
 
+LANGUAGE_META = {
+    "zh": {"name": "中文", "script": "cjk"},
+    "zh-Hans": {"name": "简体中文", "script": "cjk"},
+    "zh-Hant": {"name": "繁体中文", "script": "cjk"},
+    "en": {"name": "英语", "script": "latin"},
+    "ja": {"name": "日语", "script": "cjk"},
+    "yue": {"name": "粤语", "script": "cjk"},
+    "ko": {"name": "韩语", "script": "hangul"},
+    "fr": {"name": "法语", "script": "latin"},
+    "de": {"name": "德语", "script": "latin"},
+    "es": {"name": "西班牙语", "script": "latin"},
+    "pt": {"name": "葡萄牙语", "script": "latin"},
+    "it": {"name": "意大利语", "script": "latin"},
+    "nl": {"name": "荷兰语", "script": "latin"},
+    "tr": {"name": "土耳其语", "script": "latin"},
+    "id": {"name": "印尼语", "script": "latin"},
+    "vi": {"name": "越南语", "script": "latin"},
+    "sv": {"name": "瑞典语", "script": "latin"},
+    "ru": {"name": "俄语", "script": "cyrillic"},
+    "ar": {"name": "阿拉伯语", "script": "arabic"},
+    "hi": {"name": "印地语", "script": "devanagari"},
+    "th": {"name": "泰语", "script": "thai"},
+}
+
+
+def _normalize_language_code(code: str, fallback: str) -> str:
+    if not code or code == 'auto':
+        return fallback
+    alias_map = {
+        'zh-cn': 'zh-Hans',
+        'zh-hans': 'zh-Hans',
+        'zh-tw': 'zh-Hant',
+        'zh-hant': 'zh-Hant',
+    }
+    return alias_map.get(code, code)
+
+
+def get_language_meta(code: str) -> dict:
+    normalized = _normalize_language_code(code, 'en')
+    meta = LANGUAGE_META.get(normalized, {})
+    return {
+        'code': normalized,
+        'name': meta.get('name', normalized),
+        'script': meta.get('script', 'other'),
+    }
+
+
+def build_language_context(cfg: dict) -> dict:
+    source_code = _normalize_language_code(cfg.get('source_language') or cfg.get('whisper_language'), 'en')
+    target_code = _normalize_language_code(cfg.get('target_language'), 'zh-Hans')
+    source_meta = get_language_meta(source_code)
+    target_meta = get_language_meta(target_code)
+    return {
+        'source': source_meta,
+        'target': target_meta,
+    }
+
+
+def _extract_translation_text(text: str) -> str:
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    if len(lines) >= 2:
+        return lines[1]
+    return lines[0] if lines else ''
+
+
+def count_text_units(text: str, lang_code: str) -> int:
+    script = get_language_meta(lang_code)['script']
+    if script == 'cjk':
+        return len(re.findall(r'[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff]', text))
+    if script == 'hangul':
+        return len(re.findall(r'[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]', text))
+    if script == 'latin':
+        return len(re.findall(r'[A-Za-zÀ-ÖØ-öø-ÿ0-9]', text))
+    if script == 'cyrillic':
+        return len(re.findall(r'[\u0400-\u04ff0-9]', text))
+    if script == 'arabic':
+        return len(re.findall(r'[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff0-9]', text))
+    if script == 'devanagari':
+        return len(re.findall(r'[\u0900-\u097f0-9]', text))
+    if script == 'thai':
+        return len(re.findall(r'[\u0e00-\u0e7f0-9]', text))
+    return len(re.findall(r'\S', text))
+
+
+def default_min_units_for_language(lang_code: str) -> int:
+    script = get_language_meta(lang_code)['script']
+    if script in ('cjk', 'hangul'):
+        return 5
+    if script == 'latin':
+        return 8
+    return 5
+
 
 def load_config() -> dict:
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             saved = json.load(f)
         merged = {**DEFAULT_CONFIG, **saved}
+        for key in ('analysis_extra_headers', 'analysis_extra_body', 'translation_extra_headers', 'translation_extra_body'):
+            value = merged.get(key, '{}')
+            if isinstance(value, dict):
+                merged[key] = json.dumps(value, ensure_ascii=False, indent=2)
+            elif not isinstance(value, str):
+                merged[key] = '{}'
         return merged
     return dict(DEFAULT_CONFIG)
 
@@ -90,6 +194,20 @@ def load_config() -> dict:
 def save_config(cfg: dict):
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+def _parse_json_object(raw_value, field_name: str) -> Dict:
+    if isinstance(raw_value, dict):
+        return raw_value
+    if raw_value in (None, '', {}):
+        return {}
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError as e:
+        raise ValueError(f'{field_name} 不是有效的 JSON: {e}') from e
+    if not isinstance(parsed, dict):
+        raise ValueError(f'{field_name} 必须是 JSON 对象')
+    return parsed
 
 
 # ==================== LLM 服务 ====================
@@ -113,18 +231,28 @@ class LLMService:
         self.analysis_base_url = cfg['analysis_base_url'].rstrip('/')
         self.translation_api_key = cfg['translation_api_key']
         self.translation_base_url = cfg['translation_base_url'].rstrip('/')
+        self.analysis_extra_headers = _parse_json_object(cfg.get('analysis_extra_headers', '{}'), 'analysis_extra_headers')
+        self.analysis_extra_body = _parse_json_object(cfg.get('analysis_extra_body', '{}'), 'analysis_extra_body')
+        self.translation_extra_headers = _parse_json_object(cfg.get('translation_extra_headers', '{}'), 'translation_extra_headers')
+        self.translation_extra_body = _parse_json_object(cfg.get('translation_extra_body', '{}'), 'translation_extra_body')
 
-    def _call_chat_completions(self, messages, model, temperature=0.1, base_url=None, api_key=None):
+    def _call_chat_completions(self, messages, model, temperature=0.1,
+                               base_url=None, api_key=None,
+                               extra_headers=None, extra_body=None):
         url = f'{base_url}/chat/completions'
         headers = {
             'Authorization': f'Bearer {api_key}',
             'Content-Type': 'application/json'
         }
+        if extra_headers:
+            headers.update(extra_headers)
         payload = {
             'model': model,
             'messages': messages,
             'temperature': temperature
         }
+        if extra_body:
+            payload.update(extra_body)
         response = requests.post(url, headers=headers, json=payload, timeout=180)
         response.raise_for_status()
         data = response.json()
@@ -154,7 +282,10 @@ class LLMService:
             {'role': 'user', 'content': full_prompt}
         ]
         content, usage = self._call_chat_completions(messages, model,
-            base_url=self.analysis_base_url, api_key=self.analysis_api_key)
+            base_url=self.analysis_base_url,
+            api_key=self.analysis_api_key,
+            extra_headers=self.analysis_extra_headers,
+            extra_body=self.analysis_extra_body)
         cleaned = content.strip()
         if cleaned.startswith('```json'):
             cleaned = cleaned[7:]
@@ -164,9 +295,10 @@ class LLMService:
             cleaned = cleaned[:-3]
         return cleaned.strip(), usage
 
-    def analyze_content(self, sample_text: str, model: str) -> Tuple[str, Dict]:
+    def analyze_content(self, sample_text: str, model: str,
+                        source_language_name: str, target_language_name: str) -> Tuple[str, Dict]:
         """翻译前内容分析：识别领域、提取术语表、风格建议"""
-        prompt = f"""你是一个专业的字幕翻译顾问。请分析以下字幕文本样本，为后续翻译提供指导。
+        prompt = f"""你是一个专业的字幕翻译顾问。请分析以下{source_language_name}字幕文本样本，为后续翻译成{target_language_name}提供指导。
 
 【字幕样本】
 {sample_text}
@@ -176,7 +308,7 @@ class LLMService:
   "domain": "该内容所属领域（如：科技、金融、医学、日常对话、游戏等）",
   "style": "语体风格建议（如：口语化、正式、技术性等）",
   "glossary": [
-    {{"en": "英文术语", "zh": "建议中文翻译"}},
+    {{"source": "{source_language_name}术语", "target": "建议{target_language_name}译法"}},
     ...
   ],
   "notes": "其他翻译注意事项（简短）"
@@ -188,7 +320,10 @@ class LLMService:
 3. 只输出 JSON，不要输出其他内容"""
         messages = [{'role': 'user', 'content': prompt}]
         content, usage = self._call_chat_completions(messages, model,
-            base_url=self.translation_base_url, api_key=self.translation_api_key)
+            base_url=self.translation_base_url,
+            api_key=self.translation_api_key,
+            extra_headers=self.translation_extra_headers,
+            extra_body=self.translation_extra_body)
         cleaned = content.strip()
         if cleaned.startswith('```json'):
             cleaned = cleaned[7:]
@@ -198,19 +333,20 @@ class LLMService:
             cleaned = cleaned[:-3]
         return cleaned.strip(), usage
 
-    def diagnose_and_fix(self, problem_items: list, model: str) -> Tuple[str, Dict]:
+    def diagnose_and_fix(self, problem_items: list, model: str,
+                         source_language_name: str, target_language_name: str) -> Tuple[str, Dict]:
         """AI 诊断问题字幕并给出修复方案"""
         blocks = []
         for item in problem_items:
             block = f"问题字幕 #{item['index']}（{item['reason']}）：\n"
             if item.get('prev'):
                 p = item['prev']
-                block += f"  上一条 #{p['index']} | {p['timecode']} | 原文: {p['source']} | 译文: {p['translation']}\n"
+                block += f"  上一条 #{p['index']} | {p['timecode']} | {source_language_name}: {p['source']} | {target_language_name}: {p['translation']}\n"
             c = item['current']
-            block += f"  当前   #{c['index']} | {c['timecode']} | 原文: {c['source']} | 译文: {c['translation']}\n"
+            block += f"  当前   #{c['index']} | {c['timecode']} | {source_language_name}: {c['source']} | {target_language_name}: {c['translation']}\n"
             if item.get('next'):
                 n = item['next']
-                block += f"  下一条 #{n['index']} | {n['timecode']} | 原文: {n['source']} | 译文: {n['translation']}\n"
+                block += f"  下一条 #{n['index']} | {n['timecode']} | {source_language_name}: {n['source']} | {target_language_name}: {n['translation']}\n"
             blocks.append(block)
 
         prompt = f"""你是一个专业的字幕翻译质量检测员。以下是一些存在问题的字幕条目（附上下文）。
@@ -234,7 +370,10 @@ class LLMService:
 只输出 JSON 数组，不要输出其他内容。"""
         messages = [{'role': 'user', 'content': prompt}]
         content, usage = self._call_chat_completions(messages, model,
-            base_url=self.translation_base_url, api_key=self.translation_api_key)
+            base_url=self.translation_base_url,
+            api_key=self.translation_api_key,
+            extra_headers=self.translation_extra_headers,
+            extra_body=self.translation_extra_body)
         cleaned = content.strip()
         if cleaned.startswith('```json'):
             cleaned = cleaned[7:]
@@ -244,7 +383,9 @@ class LLMService:
             cleaned = cleaned[:-3]
         return cleaned.strip(), usage
 
-    def translate_batch(self, batch: List[SubtitleEntry], model: str, glossary_hint: str = "") -> Tuple[str, Dict]:
+    def translate_batch(self, batch: List[SubtitleEntry], model: str,
+                        source_language_name: str, target_language_name: str,
+                        glossary_hint: str = "") -> Tuple[str, Dict]:
         input_block = "\n".join(
             [f"{e.index} | {e.text.replace(chr(10), ' ')}" for e in batch]
         )
@@ -252,16 +393,16 @@ class LLMService:
         if glossary_hint:
             glossary_section = f"\n【术语表（请严格遵循以下翻译）】\n{glossary_hint}\n"
         prompt = f"""你是一个精通SRT字幕翻译的AI。
-请将提供的字幕列表翻译成中文，保持原文的语气和表达风格，确保翻译准确且符合语境，翻译结果的末尾不能带有标点符号。
+请将提供的字幕列表从{source_language_name}翻译成{target_language_name}，保持原文的语气和表达风格，确保翻译准确且符合语境，翻译结果的末尾不能带有标点符号。
 {glossary_section}
 【输入格式】
-序号 | 原文
+序号 | {source_language_name}原文
 
 【输出强制要求】
 1. 必须严格按照以下格式逐行输出：
-序号 | 原文 | 中文译文
+序号 | {source_language_name}原文 | {target_language_name}译文
 2. 序号必须与输入的序号一一对应，不能改变。
-3. "原文"必须是你收到的原文，用于校验位置，不要修改它。
+3. 第二列必须保留你收到的原文，用于校验位置，不要修改它。
 4. 输入有多少行，输出就必须有多少行，不能合并、跳过或省略任何一行。
 5. 即使某行是半截句子（句子在下一行继续），也必须单独翻译这半截并输出这一行。
 6. 绝对不要输出其他解释性文字。
@@ -271,7 +412,10 @@ class LLMService:
 """
         messages = [{'role': 'user', 'content': prompt}]
         return self._call_chat_completions(messages, model,
-            base_url=self.translation_base_url, api_key=self.translation_api_key)
+            base_url=self.translation_base_url,
+            api_key=self.translation_api_key,
+            extra_headers=self.translation_extra_headers,
+            extra_body=self.translation_extra_body)
 
 
 # ==================== SRT 后端处理 ====================
@@ -309,8 +453,14 @@ class SRTBackend:
         sample_size = min(200, len(entries))
         sample_text = "\n".join([e.text for e in entries[:sample_size]])
         llm = LLMService(cfg)
+        lang_ctx = build_language_context(cfg)
         try:
-            raw, usage = llm.analyze_content(sample_text, cfg['translation_model'])
+            raw, usage = llm.analyze_content(
+                sample_text,
+                cfg['translation_model'],
+                lang_ctx['source']['name'],
+                lang_ctx['target']['name'],
+            )
             analysis = json.loads(raw)
             logger.info("内容分析完成: 领域=%s, 术语数=%d",
                         analysis.get('domain', '未知'),
@@ -328,8 +478,12 @@ class SRTBackend:
         glossary = analysis.get('analysis', {}).get('glossary', [])
         if not glossary:
             return ""
-        lines = [f"- {item['en']} → {item['zh']}" for item in glossary
-                 if item.get('en') and item.get('zh')]
+        lines = []
+        for item in glossary:
+            source = item.get('source') or item.get('en')
+            target = item.get('target') or item.get('zh')
+            if source and target:
+                lines.append(f"- {source} → {target}")
         return "\n".join(lines) if lines else ""
 
     @staticmethod
@@ -337,6 +491,7 @@ class SRTBackend:
                         glossary_hint: str = "") -> Dict:
         entries = SRTBackend.parse_from_string(srt_content)
         llm = LLMService(cfg)
+        lang_ctx = build_language_context(cfg)
         batch_size = cfg.get('batch_size', 100)
         parallel = cfg.get('parallel_batches', 3)
         total_usage = {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
@@ -355,7 +510,12 @@ class SRTBackend:
             for attempt in range(3):
                 try:
                     raw_resp, usage = llm.translate_batch(
-                        batch, cfg['translation_model'], glossary_hint=glossary_hint)
+                        batch,
+                        cfg['translation_model'],
+                        lang_ctx['source']['name'],
+                        lang_ctx['target']['name'],
+                        glossary_hint=glossary_hint,
+                    )
                     with _usage_lock:
                         total_usage['prompt_tokens'] += usage.get('prompt_tokens', 0)
                         total_usage['completion_tokens'] += usage.get('completion_tokens', 0)
@@ -429,8 +589,8 @@ class SRTBackend:
         return fixed
 
     @staticmethod
-    def run_quality_check(entries: List[SubtitleEntry], min_chars: int = 5,
-                          min_duration: float = 0.5) -> List[dict]:
+    def run_quality_check(entries: List[SubtitleEntry], target_language: str,
+                          min_chars: int = 5, min_duration: float = 0.5) -> List[dict]:
         """后端质量检测：返回问题条目列表"""
         def _time_to_seconds(t: str) -> float:
             t = t.replace(',', '.').strip()
@@ -441,16 +601,16 @@ class SRTBackend:
 
         problems = []
         for sub in entries:
-            # 中文字数检测
-            cn_count = sum(1 for c in sub.text if '\u4e00' <= c <= '\u9fff')
+            translation_text = _extract_translation_text(sub.text)
+            unit_count = count_text_units(translation_text, target_language)
             times = sub.timecode.split('-->')
             dur = 0.0
             if len(times) == 2:
                 dur = _time_to_seconds(times[1]) - _time_to_seconds(times[0])
 
             reasons = []
-            if cn_count < min_chars:
-                reasons.append(f"中文字数不足({cn_count}<{min_chars})")
+            if unit_count < min_chars:
+                reasons.append(f"目标语言内容过短({unit_count}<{min_chars})")
             if dur < min_duration:
                 reasons.append(f"持续时间过短({dur:.2f}s<{min_duration}s)")
             if reasons:
@@ -458,6 +618,7 @@ class SRTBackend:
                     'index': sub.index,
                     'timecode': sub.timecode,
                     'text': sub.text,
+                    'unit_count': unit_count,
                     'reasons': reasons,
                 })
         return problems
@@ -528,6 +689,7 @@ class SRTBackend:
 
         # 分批发送（每批最多 30 个问题条目，避免 prompt 过长）
         llm = LLMService(cfg)
+        lang_ctx = build_language_context(cfg)
         all_fixes = []
         total_usage = {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
         batch_size = 30
@@ -535,7 +697,12 @@ class SRTBackend:
 
         for bi, fb in enumerate(fix_batches):
             try:
-                raw, usage = llm.diagnose_and_fix(fb, cfg['translation_model'])
+                raw, usage = llm.diagnose_and_fix(
+                    fb,
+                    cfg['translation_model'],
+                    lang_ctx['source']['name'],
+                    lang_ctx['target']['name'],
+                )
                 total_usage['prompt_tokens'] += usage.get('prompt_tokens', 0)
                 total_usage['completion_tokens'] += usage.get('completion_tokens', 0)
                 total_usage['total_tokens'] += usage.get('total_tokens', 0)
@@ -609,7 +776,12 @@ class SRTBackend:
                 new_translation = ''
                 try:
                     temp_entry = SubtitleEntry(prev_e.index, prev_e.timecode, merged_source)
-                    raw, retrans_usage = llm.translate_batch([temp_entry], cfg['translation_model'])
+                    raw, retrans_usage = llm.translate_batch(
+                        [temp_entry],
+                        cfg['translation_model'],
+                        lang_ctx['source']['name'],
+                        lang_ctx['target']['name'],
+                    )
                     translations = SRTBackend._align(raw, [temp_entry])
                     new_translation = translations[0] if translations else ''
                     total_usage['prompt_tokens'] += retrans_usage.get('prompt_tokens', 0)
@@ -648,7 +820,12 @@ class SRTBackend:
                 new_translation = ''
                 try:
                     temp_entry = SubtitleEntry(entry.index, entry.timecode, merged_source)
-                    raw, retrans_usage = llm.translate_batch([temp_entry], cfg['translation_model'])
+                    raw, retrans_usage = llm.translate_batch(
+                        [temp_entry],
+                        cfg['translation_model'],
+                        lang_ctx['source']['name'],
+                        lang_ctx['target']['name'],
+                    )
                     translations = SRTBackend._align(raw, [temp_entry])
                     new_translation = translations[0] if translations else ''
                     total_usage['prompt_tokens'] += retrans_usage.get('prompt_tokens', 0)
@@ -810,9 +987,18 @@ def _run_oneclick_task(task_id: str, srt_content: str, cfg: dict):
         # ---- 阶段 3：质量检测 ----
         task.update({'stage': 'checking', 'message': '正在质量检测...', 'progress': 0})
         translated_entries = SRTBackend.parse_from_string(translated_srt)
-        min_chars = cfg.get('min_chinese_chars', 5)
+        lang_ctx = build_language_context(cfg)
+        min_chars = cfg.get(
+            'min_target_chars',
+            cfg.get('min_chinese_chars', default_min_units_for_language(lang_ctx['target']['code']))
+        )
         min_dur = cfg.get('min_duration', 0.5)
-        problems = SRTBackend.run_quality_check(translated_entries, min_chars, min_dur)
+        problems = SRTBackend.run_quality_check(
+            translated_entries,
+            lang_ctx['target']['code'],
+            min_chars,
+            min_dur,
+        )
         task.update({'message': f'检测到 {len(problems)} 条问题字幕'})
 
         # ---- 阶段 4：AI 智能修复 ----
@@ -1591,9 +1777,12 @@ if __name__ == '__main__':
     logger.info("  日志文件: %s", _LOG_FILE)
     logger.info("=" * 48)
     try:
-        serve(app, host='0.0.0.0', port=9999)
+        serve(
+            app,
+            host='0.0.0.0',
+            port=9999,
+            max_request_body_size=4 * 1024 * 1024 * 1024,
+        )
     except Exception as e:
         logger.exception("服务器异常退出: %s", e)
         raise
-
-

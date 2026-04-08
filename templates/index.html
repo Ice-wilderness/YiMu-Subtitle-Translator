@@ -13,7 +13,6 @@
     <h1 class="logo">
         <div class="logo-icon">&#127916;</div>
         译幕 <span style="font-size:0.5em;font-weight:400;color:var(--muted);vertical-align:middle">v2.1</span>
-        <span style="font-size:0.38em;font-weight:400;color:var(--text-muted);margin-left:8px;vertical-align:middle">目前仅测试了英语→中文翻译</span>
     </h1>
     <nav class="step-bar">
         <div class="step active" data-step="1" onclick="switchTab(1)">
@@ -256,7 +255,7 @@
             </div>
         </div>
         <div style="text-align:center;margin-top:20px">
-            <button class="btn btn-primary" onclick="runEnglishMerge()">执行合并 &#10140;</button>
+            <button class="btn btn-primary" onclick="runShortSubtitleMerge()">执行合并 &#10140;</button>
         </div>
     </div>
 </section>
@@ -265,7 +264,7 @@
 <section class="tab-panel" id="tab-3" style="display:none">
     <div class="card">
         <h2 class="card-title"><div class="card-title-icon" style="background:#eef1fe">&#10024;</div>AI 语音识别矫正 &amp; 翻译 <span class="version-tag" id="versionDisplay">v0</span></h2>
-        <p class="card-subtitle">分两步：① 点「分析」让 AI 找出字幕中的误识别词（如"deep sea"实为"DeepSeek"），确认后点「提交修改」应用矫正，可多轮分析直到满意；② 点「最终翻译」将字幕翻译成中文。<strong>填写视频背景后，矫正准确率会显著提升。</strong></p>
+        <p class="card-subtitle">分两步：① 点「分析」让 AI 找出字幕中的误识别词（如"deep sea"实为"DeepSeek"），确认后点「提交修改」应用矫正，可多轮分析直到满意；② 点「最终翻译」将字幕翻译成目标语言。<strong>填写视频背景后，矫正准确率会显著提升。</strong></p>
         <div class="ai-grid">
             <!-- 左侧：控制台 -->
             <div class="ai-console">
@@ -352,38 +351,38 @@
 <section class="tab-panel" id="tab-4" style="display:none">
     <div class="card">
         <h2 class="card-title">双语位置调换<span style="font-size:0.7em;font-weight:400;color:var(--muted);margin-left:8px">（可选）</span></h2>
-        <p class="card-subtitle">选择双语字幕中中文和外文的上下排列顺序，选择后立即生效。</p>
+        <p class="card-subtitle" id="swapSubtitle">选择双语字幕中源语言和目标语言的上下排列顺序，选择后立即生效。</p>
         <div class="setting-row" style="flex-direction:column;align-items:center;gap:14px">
             <div class="radio-group">
                 <label class="radio-label swap-option">
-                    <input type="radio" name="swapDirection" value="en2cn" onchange="runPositionSwap()">
+                    <input type="radio" name="swapDirection" value="target_on_top" onchange="runPositionSwap()">
                     <div class="swap-demo">
                         <div class="swap-before">
-                            <span class="swap-tag">调换前</span>
-                            <div class="swap-line en">Hello World</div>
-                            <div class="swap-line cn">你好世界</div>
+                            <span class="swap-tag" id="swapDemo1BeforeTag">当前</span>
+                            <div class="swap-line en" id="swapDemo1BeforeTop">Hello World</div>
+                            <div class="swap-line cn" id="swapDemo1BeforeBottom">你好世界</div>
                         </div>
                         <span class="swap-arrow">&#10140;</span>
                         <div class="swap-after">
-                            <span class="swap-tag">调换后</span>
-                            <div class="swap-line cn">你好世界</div>
-                            <div class="swap-line en">Hello World</div>
+                            <span class="swap-tag" id="swapDemo1AfterTag">应用后</span>
+                            <div class="swap-line cn" id="swapDemo1AfterTop">你好世界</div>
+                            <div class="swap-line en" id="swapDemo1AfterBottom">Hello World</div>
                         </div>
                     </div>
                 </label>
                 <label class="radio-label swap-option">
-                    <input type="radio" name="swapDirection" value="cn2en" onchange="runPositionSwap()">
+                    <input type="radio" name="swapDirection" value="source_on_top" onchange="runPositionSwap()" checked>
                     <div class="swap-demo">
                         <div class="swap-before">
-                            <span class="swap-tag">调换前</span>
-                            <div class="swap-line cn">你好世界</div>
-                            <div class="swap-line en">Hello World</div>
+                            <span class="swap-tag" id="swapDemo2BeforeTag">当前</span>
+                            <div class="swap-line cn" id="swapDemo2BeforeTop">你好世界</div>
+                            <div class="swap-line en" id="swapDemo2BeforeBottom">Hello World</div>
                         </div>
                         <span class="swap-arrow">&#10140;</span>
                         <div class="swap-after">
-                            <span class="swap-tag">调换后</span>
-                            <div class="swap-line en">Hello World</div>
-                            <div class="swap-line cn">你好世界</div>
+                            <span class="swap-tag" id="swapDemo2AfterTag">应用后</span>
+                            <div class="swap-line en" id="swapDemo2AfterTop">Hello World</div>
+                            <div class="swap-line cn" id="swapDemo2AfterBottom">你好世界</div>
                         </div>
                     </div>
                 </label>
@@ -463,6 +462,19 @@
             <div class="settings-section">
                 <div class="settings-section-title">分析模型<span class="tooltip-wrap">?<span class="tooltip-text">用于字幕纠错分析，识别语音转文字中的错别字。需要推理能力强的模型。开发者已测试通过：Gemini 2.5 Flash / Pro、claude系列模型，其他模型未测试，欢迎自行尝试。</span></span></div>
                 <div class="form-group">
+                    <label>快速套用</label>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <select id="cfgAnalysisPreset" class="input-sm" style="flex:1">
+                            <option value="">手动配置</option>
+                            <option value="deepseek">DeepSeek</option>
+                            <option value="glm">GLM / 智谱</option>
+                            <option value="doubao">豆包 / 火山方舟</option>
+                            <option value="openai">OpenAI 官方</option>
+                        </select>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="applyModelPreset('analysis')">套用</button>
+                    </div>
+                </div>
+                <div class="form-group">
                     <label>模型名称</label>
                     <input type="text" id="cfgAnalysisModel" class="input-full" placeholder="如：gemini-2.5-flash-preview-04-17">
                 </div>
@@ -474,9 +486,30 @@
                     <label>Base URL</label>
                     <input type="text" id="cfgAnalysisBaseUrl" class="input-full" placeholder="如：https://api.openai.com/v1">
                 </div>
+                <div class="form-group">
+                    <label>额外请求头<span style="font-weight:400;color:var(--text-muted);margin-left:6px">可选，填写 JSON 对象</span></label>
+                    <textarea id="cfgAnalysisExtraHeaders" class="textarea" style="height:70px" placeholder='{}'></textarea>
+                </div>
+                <div class="form-group" style="margin-bottom:0">
+                    <label>额外请求体<span style="font-weight:400;color:var(--text-muted);margin-left:6px">可选，填写 JSON 对象</span></label>
+                    <textarea id="cfgAnalysisExtraBody" class="textarea" style="height:90px" placeholder='{}'></textarea>
+                </div>
             </div>
             <div class="settings-section">
-                <div class="settings-section-title">翻译模型<span class="tooltip-wrap">?<span class="tooltip-text">用于将字幕翻译成中文，需要语言表达能力强的模型。开发者已测试通过：GPT-4o / GPT-5.1、GLM-4.5，其他模型未测试，欢迎自行尝试。</span></span></div>
+                <div class="settings-section-title">翻译模型<span class="tooltip-wrap">?<span class="tooltip-text">用于将字幕翻译成目标语言，需要语言表达能力强的模型。开发者已测试通过：GPT-4o / GPT-5.1、GLM-4.5，其他模型未测试，欢迎自行尝试。</span></span></div>
+                <div class="form-group">
+                    <label>快速套用</label>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <select id="cfgTranslationPreset" class="input-sm" style="flex:1">
+                            <option value="">手动配置</option>
+                            <option value="deepseek">DeepSeek</option>
+                            <option value="glm">GLM / 智谱</option>
+                            <option value="doubao">豆包 / 火山方舟</option>
+                            <option value="openai">OpenAI 官方</option>
+                        </select>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="applyModelPreset('translation')">套用</button>
+                    </div>
+                </div>
                 <div class="form-group">
                     <label>模型名称</label>
                     <input type="text" id="cfgTranslationModel" class="input-full" placeholder="如：gpt-4o">
@@ -489,9 +522,25 @@
                     <label>Base URL</label>
                     <input type="text" id="cfgTranslationBaseUrl" class="input-full" placeholder="如：https://api.openai.com/v1">
                 </div>
+                <div class="form-group">
+                    <label>额外请求头<span style="font-weight:400;color:var(--text-muted);margin-left:6px">可选，填写 JSON 对象</span></label>
+                    <textarea id="cfgTranslationExtraHeaders" class="textarea" style="height:70px" placeholder='{}'></textarea>
+                </div>
+                <div class="form-group" style="margin-bottom:0">
+                    <label>额外请求体<span style="font-weight:400;color:var(--text-muted);margin-left:6px">可选，填写 JSON 对象</span></label>
+                    <textarea id="cfgTranslationExtraBody" class="textarea" style="height:90px" placeholder='{}'></textarea>
+                </div>
             </div>
             <div class="settings-section">
                 <div class="settings-section-title">翻译设置</div>
+                <div class="form-group">
+                    <label>源语言</label>
+                    <select id="cfgSourceLanguage" class="input-sm"></select>
+                </div>
+                <div class="form-group">
+                    <label>目标语言</label>
+                    <select id="cfgTargetLanguage" class="input-sm"></select>
+                </div>
                 <div class="form-group">
                     <label>批次大小<span style="font-weight:400;color:var(--text-muted);margin-left:6px">每次发送给模型的字幕条数</span></label>
                     <input type="number" id="cfgBatchSize" class="input-sm" value="100" min="10" max="500">
@@ -548,8 +597,8 @@
                 <p class="onboarding-step-desc">点击右上角 <strong>⚙ 软件设置</strong> 按钮，填写 AI 模型的 API 信息。<strong>不配置则无法使用矫正和翻译功能。</strong></p>
                 <div class="onboarding-tips"><ul>
                     <li><strong>分析模型</strong>：用于识别字幕中的误识别词，已测试：Gemini 2.5 Flash / Pro</li>
-                    <li><strong>翻译模型</strong>：用于将字幕翻译成中文，已测试：GPT-4o / GPT-5.1</li>
-                    <li>⚠ 目前仅针对<strong>英语→中文</strong>翻译进行了测试，其他语言对未验证</li>
+                    <li><strong>翻译模型</strong>：用于将字幕翻译成目标语言，已测试：GPT-4o / GPT-5.1</li>
+                    <li>⚠ 当前版本优先验证英译中，多语言链路已开放，其他语言对建议先小样本测试</li>
                     <li>两个模型可以配置不同的 API Key 和 Base URL，也可以填同一个</li>
                     <li>配置保存后永久生效，下次打开无需重新填写</li>
                 </ul></div>
@@ -569,7 +618,7 @@
                 <div class="onboarding-step-title"><div class="onboarding-step-num">2</div>短句合并</div>
                 <p class="onboarding-step-desc">语音识别经常把短词单独切成一行字幕（如 "the"、"and"、"的"、"了"），此步骤自动将这些碎片合并到上下文句子里。</p>
                 <div class="onboarding-tips"><ul>
-                    <li>「最大单词数」滑块控制多少个词以内算作短句，默认 3 个</li>
+                    <li>滑块会根据检测到的语言自动切换为“最大单词数”或“最大字符数”模式</li>
                     <li>点击「执行合并」后不可撤销，建议先确认参数</li>
                     <li>合并后会显示合并了多少条字幕</li>
                 </ul></div>
@@ -577,7 +626,7 @@
 
             <div class="onboarding-step" data-step="4">
                 <div class="onboarding-step-title"><div class="onboarding-step-num">3</div>AI 矫正 &amp; 翻译</div>
-                <p class="onboarding-step-desc">分两个阶段：① 用 AI 分析语音识别的错别字/误识别词，② 对矫正后的文本进行中文翻译。推荐使用「一键翻译」，自动完成翻译+质量检测+AI修复。</p>
+                <p class="onboarding-step-desc">分两个阶段：① 用 AI 分析语音识别的错别字/误识别词，② 对矫正后的文本进行目标语言翻译。推荐使用「一键翻译」，自动完成翻译+质量检测+AI修复。</p>
                 <div class="onboarding-tips"><ul>
                     <li><strong>重要：</strong>填写视频背景（标题和内容简介），AI 矫正效果更好</li>
                     <li><strong>一键翻译（推荐）</strong>：自动执行内容分析→并行翻译→质量检测→AI修复</li>
