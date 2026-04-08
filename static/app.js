@@ -1994,6 +1994,7 @@ function renderOnboarding() {
     let _transcribeFile = null;
     let _pollTimer = null;
     let _transcribeResult = null;
+    let _installerPollTimer = null;
 
     window.setTranscribeFile = function (file) {
         _transcribeFile = file;
@@ -2021,21 +2022,36 @@ function renderOnboarding() {
         try {
             const res = await fetch('/api/transcribe/capabilities');
             const caps = await res.json();
+            window._transcribeCaps = caps;
             window._cliAvailable = caps.cli_available;
             const statusEl = document.getElementById('engineStatus');
             const installCard = document.getElementById('cliInstallCard');
+            const pathEl = document.getElementById('cliToolsPath');
+            const capabilityText = document.getElementById('installerCapabilityText');
+            const summaryEl = document.getElementById('installerSummary');
+            if (pathEl && caps.tools_dir) pathEl.textContent = caps.tools_dir + '\\faster-whisper-xxl.exe';
             if (caps.cli_available) {
                 statusEl.textContent = '✓ CLI 可用';
                 statusEl.style.color = 'var(--success, green)';
-                if (installCard) installCard.style.display = 'none';
+                if (installCard) installCard.style.display = 'block';
             } else {
                 statusEl.textContent = '✗ CLI 未找到，将使用 Python 库';
                 statusEl.style.color = 'var(--danger, #e74c3c)';
-                if (installCard) {
-                    installCard.style.display = 'block';
-                    const pathEl = document.getElementById('cliToolsPath');
-                    if (pathEl && caps.tools_dir) pathEl.textContent = caps.tools_dir + '\\faster-whisper-xxl.exe';
-                }
+                if (installCard) installCard.style.display = 'block';
+            }
+            if (capabilityText) {
+                const parts = [
+                    caps.ffmpeg_available ? 'FFmpeg 已安装' : 'FFmpeg 未安装',
+                    caps.cli_available ? 'CLI 已安装' : 'CLI 未安装',
+                    caps.cli_models && caps.cli_models.length ? `模型：${caps.cli_models.join(', ')}` : '模型未安装'
+                ];
+                if (caps.python_available) parts.push('Python 转录可用');
+                capabilityText.textContent = parts.join(' / ');
+            }
+            if (summaryEl) {
+                summaryEl.innerHTML = (caps.ffmpeg_available && caps.cli_available && caps.cli_models && caps.cli_models.length > 0)
+                    ? '&#9889; 已检测到转录组件，如需更换模型可继续补装。'
+                    : '&#9889; 未检测到完整转录组件，建议直接在这里安装。';
             }
             onEngineChange();
         } catch (e) { /* ignore */ }
@@ -2044,6 +2060,97 @@ function renderOnboarding() {
 
     window.openToolsDir = async function () {
         await fetch('/api/open-tools-dir', { method: 'POST' });
+    };
+
+    function setInstallerButtonsDisabled(disabled) {
+        ['installRecommendedBtn', 'installLiteBtn', 'installCustomBtn'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.disabled = disabled;
+        });
+    }
+
+    function renderInstallerProgress(task) {
+        const wrap = document.getElementById('installerProgressWrap');
+        const bar = document.getElementById('installerProgressBar');
+        const text = document.getElementById('installerProgressText');
+        const detail = document.getElementById('installerProgressDetail');
+        if (!wrap || !bar || !text || !detail) return;
+        wrap.style.display = '';
+        bar.style.width = `${task.progress || 0}%`;
+        text.textContent = task.message || '正在安装...';
+        const bits = [];
+        if (task.step_index && task.step_total) bits.push(`步骤 ${task.step_index}/${task.step_total}`);
+        if (task.step_label) bits.push(task.step_label);
+        if (task.detail) bits.push(task.detail);
+        detail.textContent = bits.join(' · ');
+    }
+
+    async function pollInstaller(taskId) {
+        clearInterval(_installerPollTimer);
+        renderInstallerProgress({ progress: 0, message: '准备安装...', detail: '' });
+        setInstallerButtonsDisabled(true);
+        _installerPollTimer = setInterval(async () => {
+            try {
+                const res = await fetch(`/api/transcribe/installer/status/${taskId}`);
+                const task = await res.json();
+                if (!res.ok) throw new Error(task.error || '状态查询失败');
+                renderInstallerProgress(task);
+                if (task.status === 'error') {
+                    clearInterval(_installerPollTimer);
+                    setInstallerButtonsDisabled(false);
+                    showToast(`安装失败: ${task.error}`, 'error');
+                    return;
+                }
+                if (task.status === 'done') {
+                    clearInterval(_installerPollTimer);
+                    setInstallerButtonsDisabled(false);
+                    showToast('转录组件安装完成');
+                    if (task.result && task.result.cli_models && task.result.cli_models.length) {
+                        const modelSelect = document.getElementById('transcribeModel');
+                        const preferred = task.result.cli_models.includes('large-v2')
+                            ? 'large-v2'
+                            : task.result.cli_models[task.result.cli_models.length - 1];
+                        if (modelSelect) modelSelect.value = preferred;
+                    }
+                    await checkTranscribeCapabilities();
+                }
+            } catch (e) {
+                clearInterval(_installerPollTimer);
+                setInstallerButtonsDisabled(false);
+                showToast(`安装状态查询失败: ${e.message}`, 'error');
+            }
+        }, 1200);
+    }
+
+    window.startTranscribeInstaller = async function (plan) {
+        try {
+            const res = await fetch('/api/transcribe/installer/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ plan })
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || '安装启动失败');
+            await pollInstaller(data.task_id);
+        } catch (e) {
+            showToast(`安装启动失败: ${e.message}`, 'error');
+        }
+    };
+
+    window.startCustomTranscribeInstaller = async function () {
+        const model = document.getElementById('installerModelSelect').value;
+        try {
+            const res = await fetch('/api/transcribe/installer/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ plan: 'custom', model })
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || '安装启动失败');
+            await pollInstaller(data.task_id);
+        } catch (e) {
+            showToast(`安装启动失败: ${e.message}`, 'error');
+        }
     };
 
     window.saveWhisperConfig = async function () {
@@ -2068,6 +2175,18 @@ function renderOnboarding() {
 
     window.startTranscription = async function () {
         if (!_transcribeFile) return;
+        const caps = window._transcribeCaps || {};
+        const engine = document.getElementById('transcribeEngine').value;
+        const model = document.getElementById('transcribeModel').value;
+        const willUseCli = engine === 'cli' || (engine === 'auto' && caps.cli_available);
+        if (!willUseCli && !caps.python_available) {
+            showToast('当前没有可用的转录引擎，请先安装上方转录组件', 'error');
+            return;
+        }
+        if (willUseCli && (!caps.cli_models || !caps.cli_models.includes(model))) {
+            showToast(`当前未安装 ${model} 模型，请先在上方安装对应模型`, 'error');
+            return;
+        }
 
         // 弹出确认语言对话框
         const langSelect = document.getElementById('transcribeLang');

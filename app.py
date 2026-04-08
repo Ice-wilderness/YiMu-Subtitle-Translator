@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import uuid
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -1213,6 +1214,59 @@ _VC_COMMON_MODEL_SUBDIRS = [
     Path('其他工具') / _VC_REL_MODELS,
     _VC_REL_MODELS,
 ]
+_TOOLS_ROOT = _BASE_DIR / 'tools'
+_TOOLS_CLI_DIR = _TOOLS_ROOT / 'faster-whisper-xxl'
+_TOOLS_FFMPEG_DIR = _TOOLS_ROOT / 'ffmpeg' / 'bin'
+_CLI_MODEL_ROOT = _TOOLS_CLI_DIR / '_models'
+
+_INSTALLER_MODEL_FILES = [
+    'config.json',
+    'configuration.json',
+    'model.bin',
+    'README.md',
+    'tokenizer.json',
+    'vocabulary.txt',
+]
+
+_INSTALLER_COMPONENTS = {
+    'ffmpeg': {
+        'label': 'FFmpeg',
+        'kind': 'archive',
+        'archive_type': 'zip',
+        'url': 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip',
+        'size_hint': '约 180 MB',
+        'description': '处理音视频文件，转录音频前必需',
+    },
+    'cli_bundle': {
+        'label': 'Faster-Whisper CLI',
+        'kind': 'archive',
+        'archive_type': '7z',
+        'url': 'https://github.com/Purfview/whisper-standalone-win/releases/download/Faster-Whisper-XXL/Faster-Whisper-XXL_r245.4_windows.7z',
+        'size_hint': '约 1.6 GB',
+        'description': '本地高速转录引擎，适合非技术用户一键安装',
+    },
+}
+
+_INSTALLER_MODEL_PRESETS = {
+    'small': {'label': '快速', 'size_hint': '约 500 MB', 'description': '速度优先，适合短视频和草稿'},
+    'medium': {'label': '标准', 'size_hint': '约 1.5 GB', 'description': '平衡速度与准确率，适合多数用户'},
+    'large-v2': {'label': '高精度', 'size_hint': '约 3.0 GB', 'description': '质量优先，适合正式内容，推荐'},
+}
+
+_INSTALLER_PLANS = {
+    'recommended': {
+        'label': '推荐安装',
+        'description': '下载 FFmpeg、CLI 和 large-v2 高精度模型',
+        'model': 'large-v2',
+    },
+    'lite': {
+        'label': '轻量安装',
+        'description': '下载 FFmpeg、CLI 和 medium 标准模型',
+        'model': 'medium',
+    },
+}
+
+_installer_tasks = {}
 
 
 def _cli_candidate_paths() -> list:
@@ -1301,6 +1355,274 @@ def _auto_detect_and_save_cli():
             logger.info('[自动检测] 找到模型目录: %s', found_dir)
     if changed:
         save_config(cfg)
+
+
+def _find_ffmpeg_exe() -> str:
+    for name in ('ffmpeg', 'ffmpeg.exe'):
+        found = shutil.which(name)
+        if found:
+            return found
+    local = _TOOLS_FFMPEG_DIR / 'ffmpeg.exe'
+    return str(local) if local.exists() else ''
+
+
+def _python_transcribe_available() -> bool:
+    try:
+        import faster_whisper  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _get_installed_cli_models(model_dir: str = '') -> List[str]:
+    root = Path(model_dir or _find_cli_model_dir() or _CLI_MODEL_ROOT)
+    models = []
+    if root.exists():
+        for d in root.iterdir():
+            if d.is_dir() and d.name.startswith('faster-whisper-') and (d / 'model.bin').exists():
+                models.append(d.name.replace('faster-whisper-', ''))
+    return sorted(models)
+
+
+def _update_installer_task(task: dict, **kwargs):
+    task.update(kwargs)
+    task['updated_at'] = time.time()
+
+
+def _copy_tree_contents(src: Path, dst: Path):
+    dst.mkdir(parents=True, exist_ok=True)
+    for child in src.iterdir():
+        target = dst / child.name
+        if child.is_dir():
+            if target.exists() and target.is_dir():
+                _copy_tree_contents(child, target)
+            else:
+                shutil.copytree(child, target, dirs_exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(child, target)
+
+
+def _download_file(url: str, dest: Path, progress_cb=None):
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with requests.get(url, stream=True, timeout=(10, 600)) as resp:
+        resp.raise_for_status()
+        total = int(resp.headers.get('content-length', '0') or 0)
+        downloaded = 0
+        with open(dest, 'wb') as f:
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                if not chunk:
+                    continue
+                f.write(chunk)
+                downloaded += len(chunk)
+                if progress_cb:
+                    progress_cb(downloaded, total)
+
+
+def _extract_archive(archive_path: Path, dest_dir: Path):
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    suffix = archive_path.suffix.lower()
+    if suffix == '.zip':
+        with zipfile.ZipFile(archive_path) as zf:
+            zf.extractall(dest_dir)
+        return
+    if suffix == '.7z':
+        tar_exe = shutil.which('tar')
+        if not tar_exe:
+            raise RuntimeError('系统未找到 tar，无法自动解压 7z 包')
+        proc = subprocess.run(
+            [tar_exe, '-xf', str(archive_path), '-C', str(dest_dir)],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='ignore',
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+        )
+        if proc.returncode != 0:
+            stderr = proc.stderr.strip() or proc.stdout.strip()
+            raise RuntimeError(f'7z 解压失败: {stderr}')
+        return
+    raise RuntimeError(f'不支持的压缩格式: {archive_path.name}')
+
+
+def _find_first(root: Path, filename: str) -> Optional[Path]:
+    for path in root.rglob(filename):
+        if path.is_file():
+            return path
+    return None
+
+
+def _install_ffmpeg_component(task: dict):
+    component = _INSTALLER_COMPONENTS['ffmpeg']
+    with tempfile.TemporaryDirectory(prefix='ffmpeg_inst_') as td:
+        tmp_root = Path(td)
+        archive_path = tmp_root / 'ffmpeg.zip'
+        extract_dir = tmp_root / 'extract'
+
+        def on_download(done, total):
+            pct = 0 if total <= 0 else min(done / total, 1)
+            _update_installer_task(
+                task,
+                status='running',
+                stage='downloading',
+                message='正在下载 FFmpeg...',
+                detail=f'FFmpeg 下载中 {done // (1024 * 1024)} / {max(total // (1024 * 1024), 1) if total else "?"} MB',
+                component='ffmpeg',
+                component_progress=round(pct * 100, 1),
+            )
+
+        _download_file(component['url'], archive_path, on_download)
+        _update_installer_task(task, stage='extracting', message='正在解压 FFmpeg...', detail='正在解压 FFmpeg 压缩包')
+        _extract_archive(archive_path, extract_dir)
+
+        ffmpeg_exe = _find_first(extract_dir, 'ffmpeg.exe')
+        if not ffmpeg_exe:
+            raise RuntimeError('FFmpeg 包中未找到 ffmpeg.exe')
+        ffprobe_exe = _find_first(extract_dir, 'ffprobe.exe')
+        ffplay_exe = _find_first(extract_dir, 'ffplay.exe')
+
+        _TOOLS_FFMPEG_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ffmpeg_exe, _TOOLS_FFMPEG_DIR / 'ffmpeg.exe')
+        if ffprobe_exe:
+            shutil.copy2(ffprobe_exe, _TOOLS_FFMPEG_DIR / 'ffprobe.exe')
+        if ffplay_exe:
+            shutil.copy2(ffplay_exe, _TOOLS_FFMPEG_DIR / 'ffplay.exe')
+
+
+def _install_cli_component(task: dict):
+    component = _INSTALLER_COMPONENTS['cli_bundle']
+    with tempfile.TemporaryDirectory(prefix='cli_inst_') as td:
+        tmp_root = Path(td)
+        archive_path = tmp_root / 'cli_bundle.7z'
+        extract_dir = tmp_root / 'extract'
+
+        def on_download(done, total):
+            pct = 0 if total <= 0 else min(done / total, 1)
+            _update_installer_task(
+                task,
+                status='running',
+                stage='downloading',
+                message='正在下载 Faster-Whisper CLI...',
+                detail=f'CLI 下载中 {done // (1024 * 1024)} / {max(total // (1024 * 1024), 1) if total else "?"} MB',
+                component='cli_bundle',
+                component_progress=round(pct * 100, 1),
+            )
+
+        _download_file(component['url'], archive_path, on_download)
+        _update_installer_task(task, stage='extracting', message='正在解压 Faster-Whisper CLI...', detail='正在解压 CLI 压缩包')
+        _extract_archive(archive_path, extract_dir)
+
+        cli_exe = _find_first(extract_dir, 'faster-whisper-xxl.exe')
+        if not cli_exe:
+            raise RuntimeError('CLI 包中未找到 faster-whisper-xxl.exe')
+        source_root = cli_exe.parent
+        _copy_tree_contents(source_root, _TOOLS_CLI_DIR)
+
+        cfg = load_config()
+        cfg['whisper_cli_exe'] = str(_TOOLS_CLI_DIR / 'faster-whisper-xxl.exe')
+        cfg['whisper_cli_model_dir'] = str(_CLI_MODEL_ROOT)
+        save_config(cfg)
+
+
+def _download_model_file(model_name: str, filename: str, task: dict, file_idx: int, file_total: int):
+    dest_dir = _CLI_MODEL_ROOT / f'faster-whisper-{model_name}'
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    url = f'https://huggingface.co/Systran/faster-whisper-{model_name}/resolve/main/{filename}'
+    dest = dest_dir / filename
+
+    def on_download(done, total):
+        pct = 0 if total <= 0 else min(done / total, 1)
+        _update_installer_task(
+            task,
+            status='running',
+            stage='downloading',
+            message=f'正在下载模型 {model_name}...',
+            detail=f'模型文件 {file_idx}/{file_total}: {filename}',
+            component=f'model:{model_name}',
+            component_progress=round(pct * 100, 1),
+        )
+
+    _download_file(url, dest, on_download)
+
+
+def _install_model_component(model_name: str, task: dict):
+    file_total = len(_INSTALLER_MODEL_FILES)
+    for idx, filename in enumerate(_INSTALLER_MODEL_FILES, 1):
+        _download_model_file(model_name, filename, task, idx, file_total)
+    cfg = load_config()
+    cfg['whisper_cli_model_dir'] = str(_CLI_MODEL_ROOT)
+    cfg['whisper_model'] = model_name
+    save_config(cfg)
+
+
+def _build_install_steps(plan: str, model: str = '') -> List[Tuple[str, str]]:
+    if plan == 'custom':
+        chosen_model = model or 'medium'
+        return [
+            ('ffmpeg', _INSTALLER_COMPONENTS['ffmpeg']['label']),
+            ('cli_bundle', _INSTALLER_COMPONENTS['cli_bundle']['label']),
+            (f'model:{chosen_model}', f'Whisper 模型 {chosen_model}'),
+        ]
+    preset = _INSTALLER_PLANS.get(plan)
+    if not preset:
+        raise ValueError('未知安装方案')
+    chosen_model = preset['model']
+    return [
+        ('ffmpeg', _INSTALLER_COMPONENTS['ffmpeg']['label']),
+        ('cli_bundle', _INSTALLER_COMPONENTS['cli_bundle']['label']),
+        (f'model:{chosen_model}', f'Whisper 模型 {chosen_model}'),
+    ]
+
+
+def _run_installer_task(task_id: str, plan: str, model: str = ''):
+    task = _installer_tasks[task_id]
+    try:
+        steps = _build_install_steps(plan, model)
+        total_steps = len(steps)
+        for idx, (step_key, step_label) in enumerate(steps, 1):
+            base_progress = (idx - 1) / total_steps * 100
+            _update_installer_task(
+                task,
+                status='running',
+                progress=round(base_progress, 1),
+                step_index=idx,
+                step_total=total_steps,
+                step_label=step_label,
+                message=f'步骤 {idx}/{total_steps}: {step_label}',
+                detail='准备开始...',
+            )
+            if step_key == 'ffmpeg':
+                _install_ffmpeg_component(task)
+            elif step_key == 'cli_bundle':
+                _install_cli_component(task)
+            elif step_key.startswith('model:'):
+                _install_model_component(step_key.split(':', 1)[1], task)
+            else:
+                raise RuntimeError(f'未知安装组件: {step_key}')
+
+            _update_installer_task(
+                task,
+                progress=round(idx / total_steps * 100, 1),
+                detail=f'{step_label} 已完成',
+                component_progress=100,
+            )
+
+        _auto_detect_and_save_cli()
+        _update_installer_task(
+            task,
+            status='done',
+            progress=100,
+            message='转录组件安装完成',
+            detail='现在可以直接在界面中开始转录',
+            result={
+                'cli_available': bool(_find_cli_exe()),
+                'ffmpeg_available': bool(_find_ffmpeg_exe()),
+                'cli_models': _get_installed_cli_models(),
+            }
+        )
+    except Exception as e:
+        logger.exception('转录组件安装失败')
+        _update_installer_task(task, status='error', error=str(e), message='安装失败')
 
 
 def _run_transcription_cli(task_id: str, file_path: str, opts: dict):
@@ -1740,22 +2062,28 @@ def transcribe_capabilities():
     """检测转录引擎可用性"""
     cfg = load_config()
     cli_exe = _find_cli_exe(cfg.get('whisper_cli_exe', ''))
-    cli_model_dir = _find_cli_model_dir(cfg.get('whisper_cli_model_dir', ''))
-    # 列出已下载的 CLI 模型
-    cli_models = []
-    if cli_model_dir:
-        md = Path(cli_model_dir)
-        for d in md.iterdir():
-            if d.is_dir() and d.name.startswith('faster-whisper-'):
-                model_bin = d / 'model.bin'
-                if model_bin.exists():
-                    cli_models.append(d.name.replace('faster-whisper-', ''))
+    cli_model_dir = _find_cli_model_dir(cfg.get('whisper_cli_model_dir', '')) or str(_CLI_MODEL_ROOT)
+    cli_models = _get_installed_cli_models(cli_model_dir)
+    ffmpeg_exe = _find_ffmpeg_exe()
     return jsonify({
         'cli_available': bool(cli_exe),
         'cli_exe': cli_exe,
         'cli_model_dir': cli_model_dir,
         'cli_models': cli_models,
+        'ffmpeg_available': bool(ffmpeg_exe),
+        'ffmpeg_exe': ffmpeg_exe,
+        'python_available': _python_transcribe_available(),
         'tools_dir': str(_TOOLS_CLI_EXE.parent),
+        'installer': {
+            'plans': {
+                key: {
+                    **value,
+                    'model_meta': _INSTALLER_MODEL_PRESETS.get(value['model'], {})
+                } for key, value in _INSTALLER_PLANS.items()
+            },
+            'models': _INSTALLER_MODEL_PRESETS,
+            'installed_models': cli_models,
+        }
     })
 
 
@@ -1766,6 +2094,39 @@ def open_tools_dir():
     d.mkdir(parents=True, exist_ok=True)
     os.startfile(str(d))
     return jsonify({'ok': True})
+
+
+@app.route('/api/transcribe/installer/start', methods=['POST'])
+def transcribe_installer_start():
+    data = request.get_json() or {}
+    plan = data.get('plan', 'recommended')
+    model = data.get('model', '')
+    task_id = uuid.uuid4().hex
+    _installer_tasks[task_id] = {
+        'status': 'pending',
+        'progress': 0,
+        'message': '准备安装...',
+        'detail': '',
+        'error': None,
+        'plan': plan,
+        'model': model,
+        'step_index': 0,
+        'step_total': 0,
+        'step_label': '',
+        'component': '',
+        'component_progress': 0,
+        'updated_at': time.time(),
+    }
+    threading.Thread(target=_run_installer_task, args=(task_id, plan, model), daemon=True).start()
+    return jsonify({'task_id': task_id})
+
+
+@app.route('/api/transcribe/installer/status/<task_id>', methods=['GET'])
+def transcribe_installer_status(task_id):
+    task = _installer_tasks.get(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    return jsonify(task)
 
 
 if __name__ == '__main__':

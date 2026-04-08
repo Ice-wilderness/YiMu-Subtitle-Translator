@@ -90,13 +90,34 @@
             <!-- CLI 未检测到时显示的引导卡片 -->
             <div id="cliInstallCard" style="display:none;margin-top:12px">
                 <div style="background:var(--bg-secondary,#f8f9fa);border:1px solid var(--border,#dee2e6);border-radius:8px;padding:12px 16px;font-size:0.88em;color:var(--text-muted,#6c757d)">
-                    <div style="margin-bottom:8px">&#9889; 未检测到 faster-whisper-xxl CLI（转录速度快 5x），将使用 Python 库（速度较慢）。</div>
-                    <div style="margin-bottom:10px">如需使用 CLI，请将 <code>faster-whisper-xxl.exe</code> 放入以下目录后重启工作台：<br>
-                        <span id="cliToolsPath" style="font-family:monospace;color:var(--text,#333)"></span>
+                    <div id="installerSummary" style="margin-bottom:8px">&#9889; 未检测到完整转录组件，建议直接在这里安装。</div>
+                    <div id="installerStatusText" style="margin-bottom:10px;line-height:1.6">
+                        <div>工具目录：<span id="cliToolsPath" style="font-family:monospace;color:var(--text,#333)"></span></div>
+                        <div>当前状态：<span id="installerCapabilityText">检测中...</span></div>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+                        <button class="btn btn-sm btn-primary" id="installRecommendedBtn" onclick="startTranscribeInstaller('recommended')">&#9889; 推荐安装</button>
+                        <button class="btn btn-sm btn-secondary" id="installLiteBtn" onclick="startTranscribeInstaller('lite')">轻量安装</button>
+                        <button class="btn btn-sm btn-secondary" onclick="openToolsDir()">&#128193; 打开目录</button>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+                        <select id="installerModelSelect" class="input-sm" style="min-width:180px">
+                            <option value="small">快速 / small</option>
+                            <option value="medium" selected>标准 / medium</option>
+                            <option value="large-v2">高精度 / large-v2</option>
+                        </select>
+                        <button class="btn btn-sm btn-secondary" id="installCustomBtn" onclick="startCustomTranscribeInstaller()">自定义安装</button>
+                    </div>
+                    <div id="installerProgressWrap" style="display:none;margin-bottom:10px">
+                        <div style="background:var(--border-light);border-radius:99px;height:8px;overflow:hidden">
+                            <div id="installerProgressBar" style="width:0%;height:100%;background:var(--primary);border-radius:99px;transition:width 0.3s ease"></div>
+                        </div>
+                        <div id="installerProgressText" style="margin-top:8px;color:var(--text,#333)"></div>
+                        <div id="installerProgressDetail" style="margin-top:4px;font-size:0.82em"></div>
                     </div>
                     <div style="display:flex;gap:8px;flex-wrap:wrap">
-                        <button class="btn btn-sm btn-secondary" onclick="openToolsDir()">&#128193; 打开该目录</button>
-                        <button class="btn btn-sm btn-secondary" onclick="window.open('https://github.com/Purfview/whisper-standalone-win/releases','_blank')">&#8659; 去下载页面</button>
+                        <button class="btn btn-sm btn-secondary" onclick="window.open('https://github.com/Purfview/whisper-standalone-win/releases','_blank')">&#8659; CLI 下载页</button>
+                        <button class="btn btn-sm btn-secondary" onclick="window.open('https://github.com/BtbN/FFmpeg-Builds/releases','_blank')">&#8659; FFmpeg 下载页</button>
                     </div>
                 </div>
             </div>
