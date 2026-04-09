@@ -179,7 +179,9 @@ def default_min_units_for_language(lang_code: str) -> int:
 
 def load_config() -> dict:
     if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+        # Accept UTF-8 files with or without BOM so configs created on
+        # different machines/editors don't crash startup.
+        with open(CONFIG_FILE, 'r', encoding='utf-8-sig') as f:
             saved = json.load(f)
         merged = {**DEFAULT_CONFIG, **saved}
         for key in ('analysis_extra_headers', 'analysis_extra_body', 'translation_extra_headers', 'translation_extra_body'):
@@ -193,6 +195,7 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict):
+    # Always write plain UTF-8 to avoid persisting BOM-related parse issues.
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
@@ -240,6 +243,12 @@ class LLMService:
     def _call_chat_completions(self, messages, model, temperature=0.1,
                                base_url=None, api_key=None,
                                extra_headers=None, extra_body=None):
+        if not base_url:
+            raise ValueError('未配置 Base URL')
+        if not api_key:
+            raise ValueError('未配置 API Key')
+        if not model:
+            raise ValueError('未配置模型名称')
         url = f'{base_url}/chat/completions'
         headers = {
             'Authorization': f'Bearer {api_key}',
@@ -255,7 +264,17 @@ class LLMService:
         if extra_body:
             payload.update(extra_body)
         response = requests.post(url, headers=headers, json=payload, timeout=180)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as e:
+            response_preview = response.text.strip()
+            if len(response_preview) > 500:
+                response_preview = response_preview[:500] + '...'
+            logger.error("LLM 接口调用失败: status=%s url=%s model=%s body=%s",
+                         response.status_code, url, model, response_preview)
+            raise RuntimeError(
+                f'LLM 接口调用失败（{response.status_code}）: {response_preview or str(e)}'
+            ) from e
         data = response.json()
         content = data['choices'][0]['message']['content']
         usage = data.get('usage', {
@@ -266,7 +285,19 @@ class LLMService:
         return content, usage
 
     def analyze_corrections(self, text_sample: str, user_prompt: str, model: str) -> Tuple[str, Dict]:
-        system_prompt = "You are a helpful assistant that outputs only valid JSON."
+        system_prompt = """You are an expert ASR subtitle correction assistant.
+You must output only valid JSON.
+Your job is to find likely speech-to-text misrecognitions, especially for:
+- product names
+- person names
+- company names
+- technical terms
+- acronyms
+- uncommon words that were phonetically transcribed into common words
+
+Be willing to propose plausible candidates when the subtitle context strongly suggests a recognition mistake.
+Do not rewrite for style. Only suggest actual recognition corrections.
+Return [] only when you are genuinely confident there are no likely ASR errors in the provided text."""
         full_prompt = f"""{user_prompt}
 
 【待分析文本】
@@ -275,8 +306,10 @@ class LLMService:
 【输出要求】
 1. 只输出一个标准的 JSON 数组（不要输出对象/字典）。
 2. 每个元素格式：{{ "wrong": "错误文本", "correct": "正确文本", "reason": "一句话说明为何判断是误识别" }}
-3. 如果没有发现错误，输出空数组 []。
-4. 不要包含任何 Markdown 标记，直接输出裸 JSON。
+3. 优先找专有名词、品牌名、人名、缩写词、技术术语的误识别，以及发音相近导致的常见词替代。
+4. 如果能找到疑似误识别，请尽量给出 3-15 条最有把握的候选；只有在确实没有明显可疑项时才输出空数组 []。
+5. `wrong` 必须是原文中实际出现的文本片段，`correct` 是建议替换成的文本。
+6. 不要包含任何 Markdown 标记，直接输出裸 JSON。
 """
         messages = [
             {'role': 'system', 'content': system_prompt},
@@ -1218,6 +1251,12 @@ _TOOLS_ROOT = _BASE_DIR / 'tools'
 _TOOLS_CLI_DIR = _TOOLS_ROOT / 'faster-whisper-xxl'
 _TOOLS_FFMPEG_DIR = _TOOLS_ROOT / 'ffmpeg' / 'bin'
 _CLI_MODEL_ROOT = _TOOLS_CLI_DIR / '_models'
+_LOCAL_FFMPEG_EXE = _BASE_DIR / 'ffmpeg' / 'bin' / 'ffmpeg.exe'
+_ROOT_FFMPEG_EXE = _BASE_DIR / 'ffmpeg.exe'
+
+_LOCAL_SCAN_SKIP_DIRS = {
+    '.git', '.venv', '__pycache__', 'logs', 'docs', 'static', 'templates'
+}
 
 _INSTALLER_MODEL_FILES = [
     'config.json',
@@ -1267,6 +1306,20 @@ _INSTALLER_PLANS = {
 }
 
 _installer_tasks = {}
+
+
+def _scan_repo_for_file(filename: str, max_depth: int = 4) -> str:
+    """在项目目录内做浅层扫描，容错用户把工具解压到错误位置。"""
+    base_parts = len(_BASE_DIR.parts)
+    for root, dirs, files in os.walk(_BASE_DIR):
+        rel_depth = len(Path(root).parts) - base_parts
+        dirs[:] = [
+            d for d in dirs
+            if d not in _LOCAL_SCAN_SKIP_DIRS and rel_depth < max_depth
+        ]
+        if filename in files:
+            return str(Path(root) / filename)
+    return ''
 
 
 def _cli_candidate_paths() -> list:
@@ -1324,7 +1377,8 @@ def _find_cli_exe(hint: str = '') -> str:
     for p in _cli_candidate_paths():
         if p.exists():
             return str(p)
-    return ''
+    # 4. 扫描项目目录，容错用户直接把 release 解压到仓库任意浅层目录
+    return _scan_repo_for_file('faster-whisper-xxl.exe', max_depth=4)
 
 
 def _find_cli_model_dir(hint: str = '') -> str:
@@ -1339,6 +1393,7 @@ def _find_cli_model_dir(hint: str = '') -> str:
 
 def _auto_detect_and_save_cli():
     """启动时自动检测 CLI，如果找到且配置为空则自动保存"""
+    _ensure_local_tool_paths()
     cfg = load_config()
     changed = False
     if not cfg.get('whisper_cli_exe'):
@@ -1362,8 +1417,29 @@ def _find_ffmpeg_exe() -> str:
         found = shutil.which(name)
         if found:
             return found
-    local = _TOOLS_FFMPEG_DIR / 'ffmpeg.exe'
-    return str(local) if local.exists() else ''
+    for local in (_TOOLS_FFMPEG_DIR / 'ffmpeg.exe', _LOCAL_FFMPEG_EXE, _ROOT_FFMPEG_EXE):
+        if local.exists():
+            return str(local)
+    return _scan_repo_for_file('ffmpeg.exe', max_depth=4)
+
+
+def _prepend_to_path(path_str: str):
+    if not path_str:
+        return
+    current = os.environ.get('PATH', '')
+    parts = current.split(os.pathsep) if current else []
+    if path_str not in parts:
+        os.environ['PATH'] = path_str + (os.pathsep + current if current else '')
+
+
+def _ensure_local_tool_paths():
+    """把项目内工具目录加入 PATH，减少用户手动配环境变量。"""
+    cli_exe = _find_cli_exe()
+    ffmpeg_exe = _find_ffmpeg_exe()
+    if cli_exe:
+        _prepend_to_path(str(Path(cli_exe).parent))
+    if ffmpeg_exe:
+        _prepend_to_path(str(Path(ffmpeg_exe).parent))
 
 
 def _python_transcribe_available() -> bool:
@@ -1629,6 +1705,7 @@ def _run_transcription_cli(task_id: str, file_path: str, opts: dict):
     """使用 faster-whisper-xxl CLI 转录（与 VideoCaptioner 相同方式）"""
     task = _transcription_tasks[task_id]
     try:
+        _ensure_local_tool_paths()
         cli_exe = opts.get('cli_exe') or _find_cli_exe()
         if not cli_exe or not os.path.isfile(cli_exe):
             task.update({'status': 'error', 'error': f'未找到 faster-whisper-xxl 程序: {cli_exe}'})
@@ -1824,6 +1901,7 @@ def _do_transcribe(model, file_path, transcribe_kwargs, word_timestamps, task, i
 
 def _run_transcription(task_id: str, file_path: str, opts: dict):
     """执行转录任务，根据引擎设置选择 CLI 或 Python 库"""
+    _ensure_local_tool_paths()
     engine = opts.get('engine', 'auto')
     if engine == 'cli' or (engine == 'auto' and _find_cli_exe()):
         return _run_transcription_cli(task_id, file_path, opts)
@@ -1961,6 +2039,7 @@ def analyze():
         result = SRTBackend.run_analysis(srt_content, prompt, cfg)
         return jsonify(result)
     except Exception as e:
+        logger.exception("分析接口失败")
         return jsonify({'error': str(e)}), 500
 
 
@@ -2060,6 +2139,7 @@ def transcribe_status(task_id):
 @app.route('/api/transcribe/capabilities', methods=['GET'])
 def transcribe_capabilities():
     """检测转录引擎可用性"""
+    _ensure_local_tool_paths()
     cfg = load_config()
     cli_exe = _find_cli_exe(cfg.get('whisper_cli_exe', ''))
     cli_model_dir = _find_cli_model_dir(cfg.get('whisper_cli_model_dir', '')) or str(_CLI_MODEL_ROOT)
@@ -2131,6 +2211,7 @@ def transcribe_installer_status(task_id):
 
 if __name__ == '__main__':
     from waitress import serve
+    _ensure_local_tool_paths()
     _auto_detect_and_save_cli()
     logger.info("=" * 48)
     logger.info("  SRT 字幕翻译工作台 启动中...")

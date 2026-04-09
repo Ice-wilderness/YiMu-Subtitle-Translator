@@ -69,8 +69,21 @@ echo  [OK] All dependencies ready.
 echo  [3/4] Checking environment...
 
 ffmpeg -version >nul 2>&1
-if errorlevel 1 echo  [WARN] ffmpeg not found. Video transcription will not work.
-if not errorlevel 1 echo  [OK] ffmpeg found.
+set "FFMPEG_EXE="
+if not errorlevel 1 (
+    set "FFMPEG_EXE=ffmpeg"
+) else if exist "tools\ffmpeg\bin\ffmpeg.exe" (
+    set "FFMPEG_EXE=%CD%\tools\ffmpeg\bin\ffmpeg.exe"
+) else if exist "ffmpeg\bin\ffmpeg.exe" (
+    set "FFMPEG_EXE=%CD%\ffmpeg\bin\ffmpeg.exe"
+)
+
+if not defined FFMPEG_EXE (
+    echo  [WARN] ffmpeg not found. Video transcription will not work.
+) else (
+    echo  [OK] ffmpeg found: %FFMPEG_EXE%
+    for %%I in ("%FFMPEG_EXE%") do set "PATH=%%~dpI;%PATH%"
+)
 
 :: 搜索 faster-whisper-xxl CLI（PATH > 本地tools/ > AppData VideoCaptioner）
 set "CLI_PATH="
@@ -123,4 +136,3 @@ if %EXIT_CODE% neq 0 (
     echo  [INFO] Server stopped normally.
 )
 echo  === 窗口保持打开，输入 exit 可关闭 ===
-

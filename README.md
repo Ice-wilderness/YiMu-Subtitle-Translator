@@ -201,8 +201,29 @@ python app.py
 
 已有 SRT 文件可跳过。如需从音视频生成字幕：
 
-1. **[FFmpeg](https://ffmpeg.org/download.html)** — 用于提取音频
-2. **Faster-Whisper CLI** — 从 [whisper-standalone-win](https://github.com/Purfview/whisper-standalone-win/releases) 下载，将 `faster-whisper-xxl.exe` 放到 `tools/faster-whisper-xxl/` 目录或系统 PATH
+1. 启动脚本会自动安装 Python 依赖。只做字幕翻译时，不需要额外安装 FFmpeg 或 Whisper CLI。
+2. 如需“上传音视频直接转录”，推荐下载 **Windows 可执行版** 的 Faster-Whisper CLI，而不是 GitHub 自动生成的 `Source code (zip/tar.gz)` 源码包。
+3. 推荐目录结构如下，不需要手动配置系统 PATH：
+
+```text
+YiMu-Subtitle-Translator/
+├─ 启动工作台.bat
+├─ tools/
+│  ├─ faster-whisper-xxl/
+│  │  └─ faster-whisper-xxl.exe
+│  └─ ffmpeg/
+│     └─ bin/
+│        └─ ffmpeg.exe
+```
+
+4. 下载建议：
+   - **Faster-Whisper CLI**：从 [whisper-standalone-win Releases](https://github.com/Purfview/whisper-standalone-win/releases) 下载真正的 Windows release，解压后确保你最终拿到的是 `faster-whisper-xxl.exe`
+   - **FFmpeg**：下载 Windows 预编译版，解压后确保你最终拿到的是 `ffmpeg.exe`
+5. 本项目现在会自动检测以下几种情况：
+   - 已加入系统 PATH 的 `faster-whisper-xxl.exe` / `ffmpeg.exe`
+   - 放在项目 `tools/` 目录下的可执行文件
+   - 用户误把 release 解压到项目根目录或其浅层子目录时的可执行文件
+6. 如果你下载后只看到 `README.md`、`changelog.txt`、`.tar.xz`、`.tar`、源码目录，而没有 `faster-whisper-xxl.exe` 或 `ffmpeg.exe`，说明你下错了包。
 
 启动后界面会自动检测转录引擎是否可用。
 
